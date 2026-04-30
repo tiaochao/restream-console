@@ -1,0 +1,150 @@
+<div class="space-y-6 max-w-2xl">
+  <h2 class="text-2xl font-bold">⚙️ 设置</h2>
+
+  <% if (typeof success !== 'undefined' && success) { %>
+    <div class="px-4 py-3 bg-emerald-900/50 border border-emerald-700 rounded-lg text-emerald-300 text-sm"><%= success %></div>
+  <% } %>
+  <% if (typeof error !== 'undefined' && error) { %>
+    <div class="px-4 py-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"><%= error %></div>
+  <% } %>
+
+  <!-- 直播监控 & Cookie -->
+  <div class="bg-gray-800 rounded-xl shadow-lg p-6">
+    <h3 class="text-lg font-semibold mb-1 pb-3 border-b border-gray-700">直播监控设置</h3>
+    <p class="text-gray-400 text-xs mb-4">监控检测优先使用本地 HTTP 直连平台 API（无需 VPS），对不支持的平台才走 SSH yt-dlp。</p>
+
+    <!-- Cookie 配置 -->
+    <form method="POST" action="/settings/cookies" class="space-y-4 mb-6">
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">
+          🎵 抖音 Cookie
+          <span class="text-xs text-gray-500 ml-2">（用于检测开播状态，填入后识别成功率更高）</span>
+        </label>
+        <textarea name="douyin_cookies" rows="3" placeholder="ttwid=xxx; passport_csrf_token=xxx; ..."
+          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"><%= cfg.douyin_cookies %></textarea>
+        <div class="text-xs text-gray-500 mt-1 space-y-1">
+          <p>获取方式：浏览器打开 <a href="https://live.douyin.com" target="_blank" class="text-sky-400 hover:underline">live.douyin.com</a>，登录后按 F12 → Network → 找任意请求 → 复制 Cookie 请求头的值</p>
+          <p>至少需要 <code class="bg-gray-900 px-1 rounded">ttwid</code> 和 <code class="bg-gray-900 px-1 rounded">passport_csrf_token</code></p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3 flex-wrap">
+        <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg text-sm font-medium transition-colors">
+          保存 Cookie
+        </button>
+        <div class="flex items-center gap-2">
+          <input id="test-url" type="text" placeholder="抖音直播间 URL（留空用默认测试地址）"
+            class="px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm w-72 focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <button type="button" onclick="testCookie()" id="test-btn"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors whitespace-nowrap">
+            测试检测
+          </button>
+        </div>
+        <span id="test-result" class="text-sm"></span>
+      </div>
+    </form>
+
+    <script>
+    async function testCookie() {
+      const btn = document.getElementById('test-btn');
+      const url = document.getElementById('test-url').value.trim();
+      const resultEl = document.getElementById('test-result');
+      btn.disabled = true; btn.textContent = '检测中...';
+      resultEl.textContent = '';
+      try {
+        const fd = new FormData();
+        if (url) fd.append('test_url', url);
+        const r = await fetch('/settings/test-douyin', { method: 'POST', body: new URLSearchParams(fd) });
+        const d = await r.json();
+        resultEl.textContent = d.msg;
+        resultEl.className = 'text-sm ' + (d.ok ? (d.live ? 'text-red-400' : 'text-gray-400') : 'text-red-400');
+      } catch(e) { resultEl.textContent = '请求失败'; resultEl.className = 'text-sm text-red-400'; }
+      btn.disabled = false; btn.textContent = '测试检测';
+    }
+    </script>
+
+    <!-- 检测间隔 -->
+    <form method="POST" action="/settings/general" class="border-t border-gray-700 pt-4">
+      <input type="hidden" name="start_delay" value="<%= cfg.start_delay %>">
+      <input type="hidden" name="stall_timeout" value="<%= cfg.stall_timeout %>">
+      <input type="hidden" name="max_tasks_per_vps" value="<%= cfg.max_tasks_per_vps %>">
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">自动检测间隔（分钟）</label>
+        <input type="number" name="monitor_interval" value="<%= cfg.monitor_interval %>" min="1" max="60"
+          class="w-48 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+        <p class="text-xs text-gray-500 mt-1">修改后需重启服务生效，当前为 <%= cfg.monitor_interval %> 分钟</p>
+      </div>
+      <button type="submit" class="mt-3 bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+        保存间隔
+      </button>
+    </form>
+  </div>
+
+  <!-- 任务调度设置 -->
+  <div class="bg-gray-800 rounded-xl shadow-lg p-6">
+    <h3 class="text-lg font-semibold mb-4 pb-3 border-b border-gray-700">任务调度</h3>
+    <form method="POST" action="/settings/general" class="space-y-4">
+      <input type="hidden" name="monitor_interval" value="<%= cfg.monitor_interval %>">
+      <div class="grid grid-cols-3 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-300 mb-1">启动间隔（秒）</label>
+          <input type="number" name="start_delay" value="<%= cfg.start_delay %>" min="0" max="60"
+            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+          <p class="text-xs text-gray-500 mt-1">多任务连续启动时的间隔</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-300 mb-1">无数据超时（秒）</label>
+          <input type="number" name="stall_timeout" value="<%= cfg.stall_timeout %>" min="30" max="600"
+            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+          <p class="text-xs text-gray-500 mt-1">日志停止更新后触发自动重启</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-300 mb-1">每 VPS 任务上限</label>
+          <input type="number" name="max_tasks_per_vps" value="<%= cfg.max_tasks_per_vps %>" min="1" max="20"
+            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+          <p class="text-xs text-gray-500 mt-1">超过则拒绝启动新任务</p>
+        </div>
+      </div>
+      <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg text-sm font-medium transition-colors">
+        保存设置
+      </button>
+    </form>
+  </div>
+
+  <!-- 修改密码 -->
+  <div class="bg-gray-800 rounded-xl shadow-lg p-6">
+    <h3 class="text-lg font-semibold mb-4 pb-3 border-b border-gray-700">修改登录密码</h3>
+    <form method="POST" action="/settings/password" class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">当前密码</label>
+        <input type="password" name="current_password" required
+          class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">新密码</label>
+        <input type="password" name="new_password" required minlength="6"
+          class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">确认新密码</label>
+        <input type="password" name="confirm_password" required minlength="6"
+          class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      </div>
+      <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg text-sm font-medium transition-colors">
+        更新密码
+      </button>
+    </form>
+  </div>
+
+  <!-- VPS 依赖说明 -->
+  <div class="bg-gray-800 rounded-xl shadow-lg p-6">
+    <h3 class="text-lg font-semibold mb-3 pb-3 border-b border-gray-700">转推 VPS 依赖</h3>
+    <p class="text-gray-400 text-sm mb-3">可在 VPS管理页点「安装依赖」自动安装，或手动执行：</p>
+    <div class="bg-gray-900 rounded-lg p-4 font-mono text-xs text-gray-300 space-y-1">
+      <div>apt install -y ffmpeg curl wget</div>
+      <div># 下载 yt-dlp 独立二进制（无需 Python）</div>
+      <div>wget -O /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux</div>
+      <div>chmod +x /usr/local/bin/yt-dlp</div>
+    </div>
+    <p class="text-xs text-gray-500 mt-2">注：开播检测已改用本地直连 API，VPS 仅用于实际转推（yt-dlp + FFmpeg）。</p>
+  </div>
+</div>

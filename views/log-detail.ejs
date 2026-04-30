@@ -1,0 +1,43 @@
+<div class="space-y-6">
+  <div class="flex items-center justify-between">
+    <div class="flex items-center space-x-3">
+      <a href="/logs" class="text-gray-400 hover:text-white text-sm">← 返回日志列表</a>
+      <h2 class="text-2xl font-bold">📋 <%= task.name || ('任务 #' + task.id) %> 日志</h2>
+    </div>
+    <div class="text-sm text-gray-400"><%= task.vps_name || '--' %> · <%= task.log_file %></div>
+  </div>
+
+  <div class="bg-gray-800 rounded-xl shadow-lg overflow-hidden">
+    <div class="p-4 border-b border-gray-700 flex items-center justify-between">
+      <h3 class="text-lg font-semibold">实时日志（最近 200 行）</h3>
+      <span class="text-xs text-gray-500">每 5 秒自动刷新</span>
+    </div>
+    <div class="p-4 bg-black rounded-b-xl max-h-[70vh] overflow-auto"
+      id="log-box"
+      hx-get="/logs/<%= task.id %>/tail"
+      hx-trigger="every 5s"
+      hx-swap="innerHTML">
+      <pre class="text-gray-300 text-xs whitespace-pre-wrap break-all"><%- logContent.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') %></pre>
+    </div>
+  </div>
+
+  <% if (typeof slLogContent !== 'undefined' && slLogContent) { %>
+  <div class="bg-gray-800 rounded-xl shadow-lg overflow-hidden">
+    <div class="p-4 border-b border-gray-700">
+      <h3 class="text-lg font-semibold text-amber-400">⚠️ Streamlink 辅助日志 <span class="text-sm text-gray-500 font-normal">（/tmp/sl_<%= task.id %>.log）</span></h3>
+      <p class="text-xs text-gray-500 mt-1">pipe:0 报错时在这里查看 streamlink 的真实原因（Cookie 失效、主播未开播等）</p>
+    </div>
+    <div class="p-4 bg-black rounded-b-xl max-h-48 overflow-auto">
+      <pre class="text-amber-300 text-xs whitespace-pre-wrap break-all"><%- slLogContent.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') %></pre>
+    </div>
+  </div>
+  <% } %>
+</div>
+
+<script>
+  const box = document.getElementById('log-box');
+  box.scrollTop = box.scrollHeight;
+  document.body.addEventListener('htmx:afterSwap', (e) => {
+    if (e.target.id === 'log-box') box.scrollTop = box.scrollHeight;
+  });
+</script>

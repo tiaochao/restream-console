@@ -1,0 +1,10 @@
+<div class="space-y-6">
+  <h2 class="text-2xl font-bold">📊 状态面板</h2>
+
+  <div id="stats-container"
+    hx-get="/dashboard/stats"
+    hx-trigger="every 15s"
+    hx-swap="innerHTML">
+    <%- include('partials/stats', { stats, tasks }) %>
+  </div>
+</div>

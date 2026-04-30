@@ -1,0 +1,637 @@
+<%
+function formatDuration(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = String(Math.floor(s / 3600)).padStart(2, '0');
+  const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  const sec = String(s % 60).padStart(2, '0');
+  return h + ':' + m + ':' + sec;
+}
+%>
+<div class="space-y-6">
+  <div class="flex items-center justify-between">
+    <h2 class="text-2xl font-bold">📡 任务管理</h2>
+    <button onclick="document.getElementById('add-modal').classList.remove('hidden')"
+      class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+      + 新建任务
+    </button>
+  </div>
+
+  <% if (typeof error !== 'undefined' && error) { %>
+    <div class="px-4 py-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"><%= error %></div>
+  <% } %>
+
+  <div class="bg-gray-800 rounded-xl shadow-lg overflow-hidden">
+    <div class="p-4 border-b border-gray-700 flex items-center justify-between">
+      <h3 class="text-lg font-semibold">任务列表（<%= tasks.length %> 个）</h3>
+      <div id="batch-toolbar" class="hidden flex items-center space-x-2">
+        <span id="selected-count" class="text-sm text-gray-400">已选 0 个</span>
+        <button onclick="batchAction('start')"
+          class="text-emerald-400 hover:text-emerald-300 text-xs px-3 py-1 rounded border border-emerald-800 hover:border-emerald-600 transition-colors">
+          批量启动
+        </button>
+        <button onclick="batchAction('stop')"
+          class="text-amber-400 hover:text-amber-300 text-xs px-3 py-1 rounded border border-amber-800 hover:border-amber-600 transition-colors">
+          批量停止
+        </button>
+        <button onclick="clearSelection()" class="text-gray-400 hover:text-white text-xs px-2 py-1 transition-colors">✕ 取消</button>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead class="bg-gray-700">
+          <tr>
+            <th class="px-3 py-3 text-left w-8">
+              <input type="checkbox" id="select-all" onchange="toggleSelectAll(this)" class="w-4 h-4 accent-emerald-500">
+            </th>
+            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">状态</th>
+            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">名称</th>
+            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">VPS</th>
+            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">平台</th>
+            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">来源 URL</th>
+            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">推流密钥</th>
+            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">时长</th>
+            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">自动重启</th>
+            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">操作</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-700" id="task-tbody">
+          <% if (tasks.length === 0) { %>
+            <tr><td colspan="10" class="px-4 py-8 text-center text-gray-500">暂无任务，点击右上角新建</td></tr>
+          <% } %>
+          <% tasks.forEach(function(t) {
+            const statusMap = {
+              running:      { dot: 'bg-emerald-500 animate-pulse', text: 'text-emerald-400', label: '推流中' },
+              stalled:      { dot: 'bg-amber-500 animate-pulse',   text: 'text-amber-400',   label: '卡死' },
+              restarting:   { dot: 'bg-blue-500 animate-pulse',    text: 'text-blue-400',    label: '重启中' },
+              waiting_live: { dot: 'bg-purple-500 animate-pulse',  text: 'text-purple-400',  label: '等待开播' },
+              error:        { dot: 'bg-red-500',                   text: 'text-red-400',     label: '错误' },
+              blocked:      { dot: 'bg-orange-500',                text: 'text-orange-400',  label: '已封锁' },
+              stopped:      { dot: 'bg-gray-500',                  text: 'text-gray-400',    label: '已停止' },
+              idle:         { dot: 'bg-gray-600',                  text: 'text-gray-400',    label: '待机' },
+            };
+            const s = statusMap[t.status] || statusMap.idle;
+            const platformIcon = { youtube: '▶️', tiktok: '🎵', custom: '📺' };
+            const isRunning = ['running','stalled','restarting'].includes(t.status);
+            const isWaiting = t.status === 'waiting_live';
+            const duration = t.started_at && t.status === 'running'
+              ? formatDuration(new Date() - new Date(t.started_at + 'Z')) : '--';
+          %>
+            <tr class="hover:bg-gray-750" id="task-row-<%= t.id %>">
+              <td class="px-3 py-3">
+                <input type="checkbox" class="task-cb w-4 h-4 accent-emerald-500" value="<%= t.id %>" onchange="onCbChange()">
+              </td>
+              <td class="px-4 py-3">
+                <div class="flex items-center space-x-2">
+                  <span class="inline-block w-3 h-3 <%= s.dot %> rounded-full flex-shrink-0"></span>
+                  <span class="text-sm <%= s.text %>"><%= s.label %></span>
+                </div>
+              </td>
+              <td class="px-4 py-3 text-sm"><%= t.name || '--' %></td>
+              <td class="px-4 py-3 text-sm text-gray-300"><%= t.vps_name || '未绑定' %></td>
+              <td class="px-4 py-3 text-sm"><%= platformIcon[t.platform] || '📺' %></td>
+              <td class="px-4 py-3 text-sm max-w-xs">
+                <a href="<%= t.source_url %>" target="_blank"
+                  class="block truncate text-sky-400 hover:text-sky-300" title="<%= t.source_url %>">
+                  <%= t.source_url %>
+                </a>
+              </td>
+              <td class="px-4 py-3 text-sm font-mono text-gray-300">
+                <%= t.stream_key ? t.stream_key.substring(0, 4) + '****' : '--' %>
+              </td>
+              <td class="px-4 py-3 text-sm font-mono text-gray-300"><%= duration %></td>
+              <td class="px-4 py-3">
+                <button onclick="toggleRestart(<%= t.id %>, this)"
+                  class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none <%= t.auto_restart ? 'bg-emerald-600' : 'bg-gray-600' %>"
+                  data-state="<%= t.auto_restart ? '1' : '0' %>"
+                  title="<%= t.auto_restart ? '自动重启已开启' : '自动重启已关闭' %>">
+                  <span class="inline-block h-3 w-3 transform rounded-full bg-white transition-transform <%= t.auto_restart ? 'translate-x-5' : 'translate-x-1' %>"></span>
+                </button>
+              </td>
+              <td class="px-4 py-3">
+                <div class="flex items-center flex-wrap gap-1">
+                  <% if (isWaiting) { %>
+                    <button onclick="calibrateTask(<%= t.id %>, this)"
+                      class="text-purple-400 hover:text-purple-300 text-xs px-2 py-1 rounded border border-purple-800 hover:border-purple-600 transition-colors">
+                      校准
+                    </button>
+                    <button onclick="taskAction(<%= t.id %>, 'stop', this)"
+                      class="text-gray-400 hover:text-gray-300 text-xs px-2 py-1 rounded border border-gray-700 hover:border-gray-500 transition-colors">
+                      取消
+                    </button>
+                  <% } else if (isRunning) { %>
+                    <button onclick="taskAction(<%= t.id %>, 'stop', this)"
+                      class="text-amber-400 hover:text-amber-300 text-xs px-2 py-1 rounded border border-amber-800 hover:border-amber-600 transition-colors">
+                      停止
+                    </button>
+                  <% } else { %>
+                    <button onclick="taskAction(<%= t.id %>, 'start', this)"
+                      class="text-emerald-400 hover:text-emerald-300 text-xs px-2 py-1 rounded border border-emerald-800 hover:border-emerald-600 transition-colors">
+                      启动
+                    </button>
+                  <% } %>
+                  <button onclick="openEditModal(<%= t.id %>)"
+                    class="text-sky-400 hover:text-sky-300 text-xs px-2 py-1 rounded border border-sky-900 hover:border-sky-700 transition-colors">
+                    编辑
+                  </button>
+                  <a href="/logs/<%= t.id %>"
+                    class="text-blue-400 hover:text-blue-300 text-xs px-2 py-1 rounded border border-blue-900 hover:border-blue-700 transition-colors">
+                    日志
+                  </a>
+                  <form method="POST" action="/tasks/<%= t.id %>/delete"
+                    onsubmit="return confirm('确认删除任务？')" style="display:inline">
+                    <button type="submit"
+                      class="text-red-400 hover:text-red-300 text-xs px-2 py-1 rounded border border-red-900 hover:border-red-700 transition-colors">
+                      删除
+                    </button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- 新建任务弹窗 -->
+<div id="add-modal" class="hidden fixed inset-0 bg-black bg-opacity-60 z-40 flex items-center justify-center p-4">
+  <div class="bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+    <div class="flex items-center justify-between p-6 border-b border-gray-700">
+      <h3 class="text-lg font-semibold">新建转推任务</h3>
+      <button onclick="document.getElementById('add-modal').classList.add('hidden')"
+        class="text-gray-400 hover:text-white text-xl">✕</button>
+    </div>
+    <form method="POST" action="/tasks" class="p-6 space-y-4">
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-300 mb-1">任务名称</label>
+          <input name="name" placeholder="可选，如：某直播间转YouTube"
+            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-300 mb-1">执行 VPS</label>
+          <select name="vps_id" id="task-vps-select" onchange="loadMediaFiles(this.value)"
+            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <option value="">-- 选择 VPS --</option>
+            <% vpsList.forEach(function(v) { %>
+              <option value="<%= v.id %>"><%= v.name %></option>
+            <% }); %>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">来源直播间 URL</label>
+        <input name="source_url" id="source-url-input"
+          placeholder="https://live.douyin.com/xxx 或 https://live.bilibili.com/xxx"
+          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+        <p class="text-xs text-gray-500 mt-1">支持抖音、B站、快手、YouTube 等平台直播间 URL</p>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">
+          备用源 URL <span class="text-gray-500 font-normal">（可选，每行一个）</span>
+        </label>
+        <textarea name="backup_urls" rows="2"
+          placeholder="备用直播间URL，主源失败时依次尝试&#10;https://live.douyin.com/xxx2"
+          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"></textarea>
+        <p class="text-xs text-gray-500 mt-1">主源失败后按顺序尝试备用源</p>
+      </div>
+      <div id="media-picker-section">
+        <label class="block text-sm font-medium text-gray-300 mb-1">或从媒体库选择文件（循环推流）</label>
+        <div class="flex gap-2">
+          <select id="media-file-select" onchange="applyMediaFile(this.value)"
+            class="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <option value="">-- 先选择 VPS，再选择媒体文件 --</option>
+          </select>
+          <button type="button" onclick="openQuickUpload()"
+            class="px-3 py-2 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-gray-300 hover:text-white text-sm whitespace-nowrap transition-colors"
+            title="上传新文件到 VPS">
+            ☁ 上传
+          </button>
+        </div>
+        <!-- 快速上传面板（折叠） -->
+        <div id="quick-upload-panel" class="hidden mt-2 p-3 bg-gray-750 border border-gray-600 rounded-lg space-y-2">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-xs font-medium text-gray-300">上传文件到当前 VPS</span>
+            <button type="button" onclick="closeQuickUpload()" class="text-gray-500 hover:text-white text-sm">✕</button>
+          </div>
+          <div class="flex gap-2">
+            <input type="file" id="quick-file-input" accept=".mp4,.mkv,.avi,.ts,.mov,.flv,.wmv,.m4v,.webm"
+              onchange="onQuickFileSelect(this)"
+              class="flex-1 text-xs text-gray-300 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-gray-600 file:text-gray-200 file:cursor-pointer hover:file:bg-gray-500">
+            <button type="button" id="quick-upload-btn" onclick="startQuickUpload()" disabled
+              class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded text-xs font-medium transition-colors whitespace-nowrap">
+              开始上传
+            </button>
+          </div>
+          <!-- 进度条 -->
+          <div id="quick-progress-wrap" class="hidden">
+            <div class="flex items-center justify-between text-xs text-gray-400 mb-1">
+              <span id="quick-status-text">准备上传…</span>
+              <span id="quick-pct">0%</span>
+            </div>
+            <div class="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden">
+              <div id="quick-bar" class="h-1.5 bg-emerald-500 rounded-full transition-all duration-200" style="width:0%"></div>
+            </div>
+          </div>
+          <p id="quick-result" class="text-xs hidden"></p>
+        </div>
+      </div>
+      <% if (typeof streamKeys !== 'undefined' && streamKeys.length > 0) { %>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">从推流码库选择</label>
+        <select id="sk-picker" onchange="applyStreamKey(this.value)"
+          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+          <option value="">-- 选择已保存的推流码（可选） --</option>
+          <% streamKeys.forEach(function(k) { %>
+            <option value="<%= k.id %>"
+              data-rtmp="<%= k.rtmp_url %>"
+              data-key="<%= k.stream_key %>"
+              data-platform="<%= k.platform %>">
+              [<%= k.platform %>] <%= k.name %>
+            </option>
+          <% }); %>
+        </select>
+      </div>
+      <% } %>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">推流目标平台</label>
+        <select name="platform" id="platform-select" onchange="setPlatformRtmp(this.value)"
+          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+          <option value="youtube">YouTube</option>
+          <option value="tiktok">TikTok / 抖音</option>
+          <option value="custom">自定义 RTMP</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">RTMP 推流地址 *</label>
+        <input name="rtmp_url" id="rtmp-url" required value="rtmp://a.rtmp.youtube.com/live2"
+          placeholder="rtmp://a.rtmp.youtube.com/live2"
+          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">推流密钥 *</label>
+        <input name="stream_key" id="stream-key-input" required placeholder="xxxx-xxxx-xxxx-xxxx"
+          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      </div>
+      <div>
+        <label class="flex items-center space-x-2 cursor-pointer">
+          <input type="checkbox" name="auto_restart" value="1" checked class="w-4 h-4 accent-emerald-500">
+          <span class="text-sm text-gray-300">卡死/异常时自动重启</span>
+        </label>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">备注</label>
+        <input name="notes" placeholder="可选"
+          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      </div>
+      <div class="flex justify-end space-x-3 pt-2">
+        <button type="button" onclick="document.getElementById('add-modal').classList.add('hidden')"
+          class="px-4 py-2 text-gray-400 hover:text-white text-sm transition-colors">取消</button>
+        <button type="submit"
+          class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors">
+          创建任务
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 编辑任务弹窗 -->
+<div id="edit-modal" class="hidden fixed inset-0 bg-black bg-opacity-60 z-40 flex items-center justify-center p-4">
+  <div class="bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+    <div class="flex items-center justify-between p-6 border-b border-gray-700">
+      <h3 class="text-lg font-semibold">编辑任务</h3>
+      <button onclick="document.getElementById('edit-modal').classList.add('hidden')"
+        class="text-gray-400 hover:text-white text-xl">✕</button>
+    </div>
+    <div class="p-6 space-y-4">
+      <input type="hidden" id="edit-task-id">
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-300 mb-1">任务名称</label>
+          <input id="edit-name" placeholder="可选"
+            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-300 mb-1">执行 VPS</label>
+          <select id="edit-vps-id"
+            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <option value="">-- 选择 VPS --</option>
+            <% vpsList.forEach(function(v) { %>
+              <option value="<%= v.id %>"><%= v.name %></option>
+            <% }); %>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">来源直播间 URL *</label>
+        <input id="edit-source-url" placeholder="https://live.douyin.com/xxx"
+          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">
+          备用源 URL <span class="text-gray-500 font-normal">（每行一个）</span>
+        </label>
+        <textarea id="edit-backup-urls" rows="3"
+          placeholder="备用直播间URL，主源失败时依次尝试"
+          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"></textarea>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">RTMP 推流地址 *</label>
+        <input id="edit-rtmp-url"
+          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">推流密钥 *</label>
+        <input id="edit-stream-key"
+          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      </div>
+      <div>
+        <label class="flex items-center space-x-2 cursor-pointer">
+          <input type="checkbox" id="edit-auto-restart" class="w-4 h-4 accent-emerald-500">
+          <span class="text-sm text-gray-300">卡死/异常时自动重启</span>
+        </label>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">备注</label>
+        <input id="edit-notes" placeholder="可选"
+          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      </div>
+      <div class="flex justify-end space-x-3 pt-2">
+        <button type="button" onclick="document.getElementById('edit-modal').classList.add('hidden')"
+          class="px-4 py-2 text-gray-400 hover:text-white text-sm transition-colors">取消</button>
+        <button type="button" onclick="submitEdit()"
+          class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors">
+          保存修改
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const TASKS_DATA = <%- JSON.stringify(tasks).replace(/<\/script>/gi, '<\\/script>') %>;
+
+const RTMP_MAP = {
+  youtube: 'rtmp://a.rtmp.youtube.com/live2',
+  tiktok:  'rtmp://push.tiktokv.com/live',
+  custom:  '',
+};
+function setPlatformRtmp(p) {
+  if (p !== 'custom') document.getElementById('rtmp-url').value = RTMP_MAP[p] || '';
+}
+function applyStreamKey(skId) {
+  if (!skId) return;
+  const opt = document.querySelector('#sk-picker option[value="' + skId + '"]');
+  if (!opt) return;
+  document.getElementById('rtmp-url').value = opt.dataset.rtmp || '';
+  document.getElementById('stream-key-input').value = opt.dataset.key || '';
+  const ps = document.getElementById('platform-select');
+  if (opt.dataset.platform && ps) ps.value = opt.dataset.platform;
+}
+function formatDuration(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = String(Math.floor(s / 3600)).padStart(2, '0');
+  const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  const sec = String(s % 60).padStart(2, '0');
+  return h + ':' + m + ':' + sec;
+}
+async function loadMediaFiles(vpsId) {
+  const sel = document.getElementById('media-file-select');
+  sel.innerHTML = '<option value="">加载中…</option>';
+  if (!vpsId) { sel.innerHTML = '<option value="">-- 选择媒体文件 --</option>'; return; }
+  try {
+    const r = await fetch('/media/api/list?vps_id=' + vpsId);
+    const files = await r.json();
+    sel.innerHTML = '<option value="">-- 选择媒体文件 --</option>';
+    files.forEach(f => {
+      const opt = document.createElement('option');
+      opt.value = f.remote_path;
+      opt.textContent = f.name + (f.size ? ' (' + formatBytes(f.size) + ')' : '');
+      sel.appendChild(opt);
+    });
+    if (files.length === 0) sel.innerHTML = '<option value="">该 VPS 媒体库为空</option>';
+  } catch(e) { sel.innerHTML = '<option value="">加载失败</option>'; }
+}
+function applyMediaFile(path) {
+  if (path) document.getElementById('source-url-input').value = path;
+}
+function formatBytes(bytes) {
+  if (!bytes) return '0B';
+  const k = 1024, s = ['B','KB','MB','GB','TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return (bytes / Math.pow(k, i)).toFixed(1) + s[i];
+}
+
+// ── 单任务操作 ────────────────────────────────────────
+async function taskAction(id, action, btn) {
+  const orig = btn.textContent;
+  btn.textContent = action === 'start' ? '启动中...' : '停止中...';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/tasks/' + id + '/' + action, { method: 'POST' });
+    const d = await r.json();
+    showToast(d.msg, d.ok ? 'success' : 'error');
+    if (d.ok) setTimeout(() => location.reload(), 800);
+  } catch(e) { showToast('操作失败', 'error'); }
+  btn.textContent = orig; btn.disabled = false;
+}
+async function toggleRestart(id, btn) {
+  try {
+    const r = await fetch('/tasks/' + id + '/toggle-restart', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      const on = d.auto_restart === 1;
+      btn.className = btn.className.replace(/bg-(emerald|gray)-600/, on ? 'bg-emerald-600' : 'bg-gray-600');
+      btn.querySelector('span').className = btn.querySelector('span').className.replace(/translate-x-\d/, on ? 'translate-x-5' : 'translate-x-1');
+      btn.title = on ? '自动重启已开启' : '已关闭自动重启';
+      showToast(on ? '已开启自动重启' : '已关闭自动重启', 'info');
+    }
+  } catch(e) { showToast('操作失败', 'error'); }
+}
+
+// ── 校准（立即检测开播状态） ──────────────────────────
+async function calibrateTask(id, btn) {
+  const orig = btn.textContent;
+  btn.textContent = '检测中...';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/tasks/' + id + '/calibrate', { method: 'POST' });
+    const d = await r.json();
+    showToast(d.msg, d.ok ? (d.started ? 'success' : 'info') : 'error');
+    if (d.ok && d.started) setTimeout(() => location.reload(), 800);
+  } catch(e) { showToast('操作失败', 'error'); }
+  btn.textContent = orig; btn.disabled = false;
+}
+
+// ── 批量操作 ─────────────────────────────────────────
+function getSelectedIds() {
+  return Array.from(document.querySelectorAll('.task-cb:checked')).map(cb => parseInt(cb.value));
+}
+function onCbChange() {
+  const ids = getSelectedIds();
+  const all = document.querySelectorAll('.task-cb');
+  const sa = document.getElementById('select-all');
+  sa.indeterminate = ids.length > 0 && ids.length < all.length;
+  sa.checked = all.length > 0 && ids.length === all.length;
+  document.getElementById('selected-count').textContent = '已选 ' + ids.length + ' 个';
+  const tb = document.getElementById('batch-toolbar');
+  if (ids.length > 0) tb.classList.remove('hidden');
+  else tb.classList.add('hidden');
+}
+function toggleSelectAll(cb) {
+  document.querySelectorAll('.task-cb').forEach(c => { c.checked = cb.checked; });
+  onCbChange();
+}
+function clearSelection() {
+  document.querySelectorAll('.task-cb').forEach(c => { c.checked = false; });
+  const sa = document.getElementById('select-all');
+  sa.checked = false; sa.indeterminate = false;
+  document.getElementById('batch-toolbar').classList.add('hidden');
+}
+async function batchAction(action) {
+  const ids = getSelectedIds();
+  if (ids.length === 0) return;
+  const label = action === 'start' ? '批量启动' : '批量停止';
+  if (!confirm('确认对 ' + ids.length + ' 个任务执行' + label + '？')) return;
+  try {
+    const r = await fetch('/tasks/batch-' + action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    const d = await r.json();
+    showToast(d.msg, d.ok ? 'success' : 'error');
+    if (d.ok) setTimeout(() => location.reload(), action === 'start' ? 2000 : 800);
+  } catch(e) { showToast('操作失败', 'error'); }
+}
+
+// ── 编辑任务 ─────────────────────────────────────────
+function openEditModal(id) {
+  const task = TASKS_DATA.find(t => t.id === id);
+  if (!task) return;
+  document.getElementById('edit-task-id').value = id;
+  document.getElementById('edit-name').value = task.name || '';
+  document.getElementById('edit-vps-id').value = task.vps_id || '';
+  document.getElementById('edit-source-url').value = task.source_url || '';
+  document.getElementById('edit-backup-urls').value = task.backup_urls || '';
+  document.getElementById('edit-rtmp-url').value = task.rtmp_url || '';
+  document.getElementById('edit-stream-key').value = task.stream_key || '';
+  document.getElementById('edit-auto-restart').checked = !!task.auto_restart;
+  document.getElementById('edit-notes').value = task.notes || '';
+  document.getElementById('edit-modal').classList.remove('hidden');
+}
+async function submitEdit() {
+  const id = document.getElementById('edit-task-id').value;
+  const body = {
+    name:         document.getElementById('edit-name').value,
+    vps_id:       document.getElementById('edit-vps-id').value,
+    source_url:   document.getElementById('edit-source-url').value,
+    backup_urls:  document.getElementById('edit-backup-urls').value,
+    rtmp_url:     document.getElementById('edit-rtmp-url').value,
+    stream_key:   document.getElementById('edit-stream-key').value,
+    auto_restart: document.getElementById('edit-auto-restart').checked ? '1' : '0',
+    notes:        document.getElementById('edit-notes').value,
+  };
+  try {
+    const r = await fetch('/tasks/' + id + '/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    showToast(d.msg, d.ok ? 'success' : 'error');
+    if (d.ok) {
+      document.getElementById('edit-modal').classList.add('hidden');
+      setTimeout(() => location.reload(), 800);
+    }
+  } catch(e) { showToast('操作失败', 'error'); }
+// ── 快速上传到 VPS ─────────────────────────────────────
+let quickXhr = null;
+
+function openQuickUpload() {
+  const vpsId = document.getElementById('task-vps-select').value;
+  if (!vpsId) { showToast('请先选择 VPS', 'error'); return; }
+  document.getElementById('quick-upload-panel').classList.remove('hidden');
+  document.getElementById('quick-file-input').value = '';
+  document.getElementById('quick-upload-btn').disabled = true;
+  document.getElementById('quick-progress-wrap').classList.add('hidden');
+  document.getElementById('quick-result').classList.add('hidden');
+  document.getElementById('quick-bar').style.width = '0%';
+}
+function closeQuickUpload() {
+  if (quickXhr) { quickXhr.abort(); quickXhr = null; }
+  document.getElementById('quick-upload-panel').classList.add('hidden');
+}
+function onQuickFileSelect(input) {
+  document.getElementById('quick-upload-btn').disabled = !input.files[0];
+  document.getElementById('quick-result').classList.add('hidden');
+}
+function startQuickUpload() {
+  const input = document.getElementById('quick-file-input');
+  if (!input.files[0]) return;
+  const vpsId = document.getElementById('task-vps-select').value;
+  if (!vpsId) { showToast('请先选择 VPS', 'error'); return; }
+
+  const formData = new FormData();
+  formData.append('file', input.files[0]);
+
+  document.getElementById('quick-upload-btn').disabled = true;
+  document.getElementById('quick-progress-wrap').classList.remove('hidden');
+  document.getElementById('quick-result').classList.add('hidden');
+  document.getElementById('quick-bar').className = 'h-1.5 bg-emerald-500 rounded-full transition-all duration-200';
+
+  const xhr = new XMLHttpRequest();
+  quickXhr = xhr;
+  let startTime = Date.now();
+
+  xhr.upload.onprogress = (e) => {
+    if (!e.lengthComputable) return;
+    const pct = Math.round(e.loaded / e.total * 100);
+    document.getElementById('quick-bar').style.width = pct + '%';
+    document.getElementById('quick-pct').textContent = pct + '%';
+    document.getElementById('quick-status-text').textContent = pct < 100 ? '上传到服务器…' : '正在 SFTP 传输到 VPS…';
+  };
+
+  xhr.onload = () => {
+    quickXhr = null;
+    const resultEl = document.getElementById('quick-result');
+    resultEl.classList.remove('hidden');
+    try {
+      const d = JSON.parse(xhr.responseText);
+      if (d.ok) {
+        resultEl.className = 'text-xs text-emerald-400';
+        resultEl.textContent = '✓ ' + d.msg;
+        document.getElementById('quick-status-text').textContent = '完成';
+        showToast(d.msg, 'success');
+        setTimeout(() => {
+          loadMediaFiles(vpsId);
+          closeQuickUpload();
+        }, 1200);
+      } else {
+        resultEl.className = 'text-xs text-red-400';
+        resultEl.textContent = '✗ ' + d.msg;
+        document.getElementById('quick-bar').className = 'h-1.5 bg-red-500 rounded-full';
+        document.getElementById('quick-upload-btn').disabled = false;
+      }
+    } catch(e) {
+      resultEl.className = 'text-xs text-red-400';
+      resultEl.textContent = '响应解析失败';
+      document.getElementById('quick-upload-btn').disabled = false;
+    }
+  };
+
+  xhr.onerror = () => {
+    quickXhr = null;
+    const resultEl = document.getElementById('quick-result');
+    resultEl.classList.remove('hidden');
+    resultEl.className = 'text-xs text-red-400';
+    resultEl.textContent = '网络错误';
+    document.getElementById('quick-upload-btn').disabled = false;
+  };
+
+  xhr.open('POST', `/media/${vpsId}/upload`);
+  xhr.send(formData);
+}
+</script>

@@ -5,15 +5,13 @@
 输出: live | offline | unknown
 
 检测逻辑:
-  1. webcast/reflow API → offline 信号 (status=4/5) 立即返回 offline
-  2. API live 信号不可信（CDN 缓存），进入流内容验证
-  3. yt-dlp 获取流地址 → 拿不到则 offline
-  4. m3u8 检查 #EXT-X-ENDLIST 标记：
-       有标记 → offline（回放或已结束）
-       无标记 + 有分片 → live（真实直播中）
-  5. FLV 流 → 读取前 64KB 确认有数据
+  1. webcast/reflow API → status=4/5 (offline 信号可信) 立即返回 offline
+  2. API live 信号完全不信任 → 进入流内容验证
+  3. yt-dlp 优先获取 m3u8 地址，获取不到则取 FLV
+  4. m3u8: 检查 #EXT-X-ENDLIST 标记（有=回放/已结束，无=直播中）
+  5. FLV:  检查 Content-Length 响应头（有=VoD 有限文件，无=无限直播流）
 """
-import sys, re, json, urllib.request, subprocess
+import sys, re, json, urllib.request, urllib.error, subprocess
 
 UA = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -35,9 +33,10 @@ def http_get(url, cookies='', referer='https://live.douyin.com/', timeout=15):
         return resp.read().decode('utf-8', errors='replace')
 
 
-# ── 方式 1：webcast room API（仅信任 offline 信号）────────────────────────────
+# ── API 检测（仅用于 offline 信号）──────────────────────────────────────────
+
 def check_room_api(web_rid, cookies):
-    """返回 (is_offline: bool|None, room_id: str)"""
+    """返回 (is_offline: bool, room_id: str)"""
     url = (
         'https://live.douyin.com/webcast/room/web/enter/'
         f'?aid=6383&app_name=douyin_web&live_id=1&device_platform=web'
@@ -45,93 +44,109 @@ def check_room_api(web_rid, cookies):
         f'&browser_name=Chrome&browser_version=120.0.0.0'
         f'&web_rid={web_rid}&msToken='
     )
-    body = http_get(url, cookies)
-    data = json.loads(body)
-    room = (data.get('data') or {}).get('room') or {}
+    body  = http_get(url, cookies)
+    data  = json.loads(body)
+    room  = (data.get('data') or {}).get('room') or {}
     room_id = str(room.get('id', ''))
-    status = room.get('status')
-    if status in (4, 5):  return True, room_id   # 确认结束
-    return False, room_id                          # 其他状态不可信
+    status  = room.get('status')
+    return status in (4, 5), room_id   # True=确认 offline
 
-
-# ── 方式 2：reflow API（仅信任 offline 信号）────────────────────────────────
 def check_reflow_offline(room_id):
-    """返回 True 表示确认 offline，False 表示不确定"""
     if not room_id:
         return False
-    url = f'https://webcast.amemv.com/douyin/webcast/reflow/{room_id}'
+    url  = f'https://webcast.amemv.com/douyin/webcast/reflow/{room_id}'
     body = http_get(url, referer='https://live.douyin.com/')
-    m = re.search(r'"status"\s*:\s*(\d+)', body)
-    if m and int(m.group(1)) in (4, 5):
-        return True
-    return False
+    m    = re.search(r'"status"\s*:\s*(\d+)', body)
+    return bool(m and int(m.group(1)) in (4, 5))
 
 
-# ── 方式 3：yt-dlp 获取流地址 ────────────────────────────────────────────────
+# ── yt-dlp 获取流地址（优先 HLS）────────────────────────────────────────────
+
 def get_stream_url(page_url, cookies):
-    cmd = ['yt-dlp', '--no-warnings', '--socket-timeout', '15', '-g', page_url]
+    base = ['yt-dlp', '--no-warnings', '--socket-timeout', '15', '-g']
     if cookies:
-        cmd += ['--add-header', f'Cookie:{cookies}']
+        base += ['--add-header', f'Cookie:{cookies}']
+
+    # 优先 HLS（m3u8 有 EXT-X-ENDLIST 标记，最好判断）
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=35)
-        lines = [l.strip() for l in r.stdout.strip().splitlines()
-                 if l.strip().startswith('http')]
+        r = subprocess.run(base + ['--format', 'hls*', page_url],
+                           capture_output=True, text=True, timeout=35)
+        lines = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith('http')]
+        if lines:
+            return lines[0]
+    except Exception:
+        pass
+
+    # 降级：任意格式
+    try:
+        r = subprocess.run(base + [page_url],
+                           capture_output=True, text=True, timeout=35)
+        lines = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith('http')]
         return lines[0] if lines else ''
     except Exception:
         return ''
 
 
-# ── 方式 4a：m3u8 manifest 检查（最可靠）────────────────────────────────────
-def check_m3u8(url):
+# ── 流内容验证 ───────────────────────────────────────────────────────────────
+
+def is_live_stream(url):
     """
-    返回 True=直播中, False=已结束/回放, None=无法判断
-    直播流 m3u8 永远没有 #EXT-X-ENDLIST
-    VOD/回放 m3u8 在文件末尾有 #EXT-X-ENDLIST
+    通过 HTTP 响应头 + 内容判断直播流 vs VoD 回放
+      m3u8: #EXT-X-ENDLIST 在文件末尾 → VoD；缺失 → 直播
+      FLV/其他: Content-Length 存在 → 有限文件 → VoD；不存在 → 无限直播流
+    返回 True=直播中, False=非直播, None=无法判断
     """
     try:
-        manifest = http_get(url, timeout=10)
-        if '#EXT-X-ENDLIST' in manifest:
-            return False  # 有结束标记 → VOD 或已结束的直播
-        if '#EXTINF' in manifest or '#EXT-X-STREAM-INF' in manifest:
-            return True   # 有分片且无结束标记 → 真实直播
+        req  = urllib.request.Request(url, headers={'User-Agent': UA})
+        resp = urllib.request.urlopen(req, timeout=10)
+        ctype          = (resp.headers.get('Content-Type') or '').lower()
+        content_length = resp.headers.get('Content-Length')
+
+        # ── HLS 检测 ──
+        if 'm3u8' in url or 'mpegurl' in ctype:
+            manifest = resp.read(16384).decode('utf-8', errors='replace')
+            if '#EXT-X-ENDLIST' in manifest:
+                return False   # 结束标记 → VoD / 已结束
+            if '#EXTINF' in manifest or '#EXT-X-STREAM-INF' in manifest:
+                return True    # 有分片、无结束标记 → 真实直播
+            return None        # manifest 内容异常
+
+        # ── FLV / 其他格式 ──
+        if content_length is not None:
+            # 有 Content-Length → 有限大小的文件 → VoD 回放
+            return False
+
+        # 无 Content-Length（无限流）→ 读几 KB 确认有数据
+        chunk = resp.read(32768)
+        return len(chunk) > 10000
+
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 404, 410):
+            return False
         return None
     except Exception:
         return None
 
 
-# ── 方式 4b：FLV 字节验证 ─────────────────────────────────────────────────
-def check_bytes(url):
-    """读取前 64KB，确认流有持续数据输出"""
-    try:
-        req = urllib.request.Request(url, headers={'User-Agent': UA})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            chunk = resp.read(65536)
-            return len(chunk) > 10000
-    except Exception:
-        return False
-
-
-# ── 终极验证：流地址 + 内容检查 ───────────────────────────────────────────
 def verify_live(page_url, cookies):
     stream_url = get_stream_url(page_url, cookies)
     if not stream_url:
-        return False  # 拿不到流地址 → 未开播
+        return False          # 拿不到流地址 → 未开播
 
-    if 'm3u8' in stream_url:
-        result = check_m3u8(stream_url)
-        if result is not None:
-            return result
-        # m3u8 检查失败，降级到字节验证
+    result = is_live_stream(stream_url)
+    if result is not None:
+        return result
 
-    return check_bytes(stream_url)
+    return False              # 无法判断时保守返回 offline
 
 
 # ── 主流程 ────────────────────────────────────────────────────────────────────
+
 def main():
     url     = sys.argv[1] if len(sys.argv) > 1 else ''
     cookies = sys.argv[2] if len(sys.argv) > 2 else ''
 
-    # ── live.douyin.com/ROOMID 格式 ──────────────────────────────────────────
+    # ── live.douyin.com/ROOMID ───────────────────────────────────────────────
     room_m = re.search(r'live\.douyin\.com/(\d+)', url)
     if room_m:
         web_rid = room_m.group(1)
@@ -145,11 +160,11 @@ def main():
         except Exception:
             pass
 
-        # 2. 从 HTML 提取 room_id（若 API 未返回）
+        # 2. 从 HTML 补充 room_id（API 未返回时）
         if not room_id:
             try:
                 html = http_get(f'https://live.douyin.com/{web_rid}', cookies)
-                rm = re.search(r'"roomId"\s*:\s*"?(\d{15,})"?', html)
+                rm   = re.search(r'"roomId"\s*:\s*"?(\d{15,})"?', html)
                 if rm:
                     room_id = rm.group(1)
             except Exception:
@@ -170,7 +185,7 @@ def main():
             print('unknown')
         return
 
-    # ── www.douyin.com/user/SECID 格式 ───────────────────────────────────────
+    # ── www.douyin.com/user/SECID ────────────────────────────────────────────
     sec_m = re.search(r'(?:www\.douyin\.com|v\.douyin\.com)/user/([A-Za-z0-9_\-]+)', url)
     if sec_m:
         try:

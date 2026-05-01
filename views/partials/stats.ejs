@@ -1,105 +1,106 @@
 <!-- 统计卡片 + 任务表 — 用于 HTMX 轮询局部刷新 -->
-<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-  <div class="bg-gray-800 rounded-xl shadow-lg p-6">
-    <div class="flex items-center justify-between">
-      <div>
-        <p class="text-gray-400 text-sm">VPS 在线</p>
-        <p class="text-2xl font-bold text-emerald-400"><%= stats.onlineVps %>/<%= stats.totalVps %></p>
-      </div>
-      <div class="text-3xl">🖥️</div>
+<div class="grid-4 section">
+  <div class="stat-card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span class="stat-label">VPS 在线</span>
+      <span style="width:32px;height:32px;background:rgba(16,185,129,0.12);border-radius:8px;display:flex;align-items:center;justify-content:center;">
+        <svg width="16" height="16" fill="none" stroke="#34d399" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="8" rx="2" stroke-width="1.8"/><rect x="2" y="14" width="20" height="6" rx="2" stroke-width="1.8"/><circle cx="6" cy="8" r="1" fill="#34d399"/></svg>
+      </span>
     </div>
+    <div class="stat-value" style="color:#34d399"><%= stats.onlineVps %>/<%= stats.totalVps %></div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:6px;">台服务器在线</div>
   </div>
-  <div class="bg-gray-800 rounded-xl shadow-lg p-6">
-    <div class="flex items-center justify-between">
-      <div>
-        <p class="text-gray-400 text-sm">运行中任务</p>
-        <p class="text-2xl font-bold text-emerald-400"><%= stats.runningTasks %></p>
-      </div>
-      <div class="text-3xl">▶️</div>
+  <div class="stat-card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span class="stat-label">推流中</span>
+      <span style="width:32px;height:32px;background:rgba(20,184,166,0.12);border-radius:8px;display:flex;align-items:center;justify-content:center;">
+        <svg width="16" height="16" fill="none" stroke="#14b8a6" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M5 3l14 9-14 9V3z"/></svg>
+      </span>
     </div>
+    <div class="stat-value" style="color:#14b8a6"><%= stats.runningTasks %></div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:6px;">个任务运行中</div>
   </div>
-  <div class="bg-gray-800 rounded-xl shadow-lg p-6">
-    <div class="flex items-center justify-between">
-      <div>
-        <p class="text-gray-400 text-sm">错误任务</p>
-        <p class="text-2xl font-bold text-red-400"><%= stats.errorTasks %></p>
-      </div>
-      <div class="text-3xl">⚠️</div>
+  <div class="stat-card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span class="stat-label">异常任务</span>
+      <span style="width:32px;height:32px;background:rgba(239,68,68,0.12);border-radius:8px;display:flex;align-items:center;justify-content:center;">
+        <svg width="16" height="16" fill="none" stroke="#f87171" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+      </span>
     </div>
+    <div class="stat-value" style="color:<%= stats.errorTasks > 0 ? '#f87171' : 'var(--text-1)' %>"><%= stats.errorTasks %></div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:6px;">个任务出错</div>
   </div>
-  <div class="bg-gray-800 rounded-xl shadow-lg p-6">
-    <div class="flex items-center justify-between">
-      <div>
-        <p class="text-gray-400 text-sm">总任务数</p>
-        <p class="text-2xl font-bold text-white"><%= stats.totalTasks %></p>
-      </div>
-      <div class="text-3xl">📋</div>
+  <div class="stat-card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span class="stat-label">总任务数</span>
+      <span style="width:32px;height:32px;background:rgba(255,255,255,0.06);border-radius:8px;display:flex;align-items:center;justify-content:center;">
+        <svg width="16" height="16" fill="none" stroke="var(--text-2)" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+      </span>
     </div>
+    <div class="stat-value"><%= stats.totalTasks %></div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:6px;">个任务已创建</div>
   </div>
 </div>
 
 <!-- 任务状态表 -->
-<div class="bg-gray-800 rounded-xl shadow-lg overflow-hidden">
-  <div class="p-4 border-b border-gray-700">
-    <h3 class="text-lg font-semibold">任务状态</h3>
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">任务状态</span>
+    <span style="font-size:12px;color:var(--text-3);">每 15 秒自动刷新</span>
   </div>
-  <div class="overflow-x-auto">
-    <table class="w-full">
-      <thead class="bg-gray-700">
+  <div style="overflow-x:auto">
+    <table class="data-table">
+      <thead>
         <tr>
-          <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">状态</th>
-          <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">VPS</th>
-          <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">平台</th>
-          <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">来源直播间</th>
-          <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">密钥</th>
-          <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">时长</th>
-          <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">备注</th>
+          <th>状态</th>
+          <th>VPS</th>
+          <th>平台</th>
+          <th>来源直播间</th>
+          <th>密钥</th>
+          <th>运行时长</th>
+          <th>备注</th>
         </tr>
       </thead>
-      <tbody class="divide-y divide-gray-700">
+      <tbody>
         <% if (tasks.length === 0) { %>
-          <tr><td colspan="7" class="px-4 py-8 text-center text-gray-500">暂无任务</td></tr>
+          <tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text-3);">暂无任务 — 前往<a href="/tasks" class="link" style="margin:0 4px;">任务管理</a>创建</td></tr>
         <% } %>
         <% tasks.forEach(function(t) {
-          const statusMap = {
-            running:      { dot: 'bg-emerald-500 animate-pulse', text: 'text-emerald-400', label: '推流中' },
-            stalled:      { dot: 'bg-amber-500 animate-pulse',   text: 'text-amber-400',   label: '卡死' },
-            restarting:   { dot: 'bg-blue-500 animate-pulse',    text: 'text-blue-400',    label: '重启中' },
-            waiting_live: { dot: 'bg-purple-500 animate-pulse',  text: 'text-purple-400',  label: '等待开播' },
-            error:        { dot: 'bg-red-500',                   text: 'text-red-400',     label: '错误' },
-            blocked:      { dot: 'bg-orange-500',                text: 'text-orange-400',  label: '已封锁' },
-            stopped:      { dot: 'bg-gray-500',                  text: 'text-gray-400',    label: '已停止' },
-            idle:         { dot: 'bg-gray-600',                  text: 'text-gray-400',    label: '待机' },
+          const statusCfg = {
+            running:      { cls: 'badge-green',  dot: '#34d399', label: '推流中',  pulse: true },
+            stalled:      { cls: 'badge-yellow', dot: '#fbbf24', label: '卡死',    pulse: true },
+            restarting:   { cls: 'badge-blue',   dot: '#60a5fa', label: '重启中',  pulse: true },
+            waiting_live: { cls: 'badge-blue',   dot: '#60a5fa', label: '等待开播', pulse: true },
+            error:        { cls: 'badge-red',    dot: '#f87171', label: '错误',    pulse: false },
+            blocked:      { cls: 'badge-orange', dot: '#fb923c', label: '已封锁',  pulse: false },
+            stopped:      { cls: 'badge-gray',   dot: '#71717a', label: '已停止',  pulse: false },
+            idle:         { cls: 'badge-gray',   dot: '#52525b', label: '待机',    pulse: false },
           };
-          const s = statusMap[t.status] || statusMap.idle;
-          const pIcon = { youtube: '▶️', tiktok: '🎵', custom: '📺' };
+          const s = statusCfg[t.status] || statusCfg.idle;
+          const pText = { youtube: 'YouTube', tiktok: 'TikTok', custom: '自定义' };
           let duration = '--';
           if (t.started_at && t.status === 'running') {
             const sec = Math.floor((Date.now() - new Date(t.started_at + 'Z').getTime()) / 1000);
             duration = [Math.floor(sec/3600), Math.floor((sec%3600)/60), sec%60].map(n=>String(n).padStart(2,'0')).join(':');
           }
         %>
-          <tr class="hover:bg-gray-750">
-            <td class="px-4 py-3">
-              <div class="flex items-center space-x-2">
-                <span class="inline-block w-3 h-3 <%= s.dot %> rounded-full"></span>
-                <span class="text-sm <%= s.text %>"><%= s.label %></span>
-              </div>
+          <tr>
+            <td>
+              <span class="badge <%= s.cls %>">
+                <span class="badge-dot <%= s.pulse ? 'pulse' : '' %>" style="background:<%= s.dot %>"></span>
+                <%= s.label %>
+              </span>
             </td>
-            <td class="px-4 py-3 text-sm"><%= t.vps_name || '--' %></td>
-            <td class="px-4 py-3 text-sm"><%= pIcon[t.platform] || '📺' %></td>
-            <td class="px-4 py-3 text-sm max-w-xs">
-              <a href="<%= t.source_url %>" target="_blank" class="block truncate text-sky-400 hover:text-sky-300" title="<%= t.source_url %>">
+            <td class="text-muted"><%= t.vps_name || '--' %></td>
+            <td class="text-muted"><%= pText[t.platform] || t.platform %></td>
+            <td>
+              <a href="<%= t.source_url %>" target="_blank" class="link truncate-url" title="<%= t.source_url %>">
                 <%= t.source_url %>
               </a>
             </td>
-            <td class="px-4 py-3 text-sm font-mono text-gray-300">
-              <%= t.stream_key ? t.stream_key.substring(0,4) + '****' : '--' %>
-            </td>
-            <td class="px-4 py-3 text-sm font-mono text-gray-300 whitespace-nowrap"><%= duration %></td>
-            <td class="px-4 py-3 text-sm text-gray-400">
-              <div class="truncate max-w-xs" title="<%= t.notes || '' %>"><%= t.notes || '--' %></div>
-            </td>
+            <td class="text-muted monospace" style="font-size:12px;"><%= t.stream_key ? t.stream_key.substring(0,4) + '••••' : '--' %></td>
+            <td class="text-muted monospace" style="font-size:12px;white-space:nowrap"><%= duration %></td>
+            <td class="text-dim"><%= t.notes || '--' %></td>
           </tr>
         <% }); %>
       </tbody>

@@ -10,4 +10,9 @@ function requireAuth(req, res, next) {
   res.redirect('/login');
 }
 
-module.exports = { requireAuth };
+function requireAdmin(req, res, next) {
+  if (res.locals.currentUser?.role === 'admin') return next();
+  res.status(403).send('无权限');
+}
+
+module.exports = { requireAuth, requireAdmin };

@@ -1,197 +1,256 @@
-<div class="space-y-6">
-  <div class="flex items-center justify-between">
-    <div>
-      <h2 class="text-2xl font-bold">📺 频道监控</h2>
-      <p class="text-gray-400 text-sm mt-1">保存直播间链接，自动检测开播状态，开播后可自动启动转推任务。</p>
-    </div>
-    <div class="flex gap-2">
-      <button onclick="checkAll(this)"
-        class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors">
-        全部检测
-      </button>
-      <button onclick="document.getElementById('add-modal').classList.remove('hidden')"
-        class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors">
-        + 添加频道
-      </button>
-    </div>
+<div class="page-header">
+  <div>
+    <h2 class="page-title">频道监控</h2>
+    <p class="page-subtitle">保存直播间链接，自动检测开播状态，开播后可自动启动转推任务。</p>
   </div>
-
-  <% if (typeof error !== 'undefined' && error) { %>
-    <div class="px-4 py-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"><%= error %></div>
-  <% } %>
-
-  <!-- 说明 -->
-  <div class="bg-blue-900/30 border border-blue-700 rounded-lg px-4 py-3 text-sm text-blue-300">
-    每 5 分钟自动检测一次开播状态（需要至少一台在线 VPS 提供 yt-dlp 支持）。开播后若开启「自动启动」，将自动创建并启动转推任务。
+  <div class="flex" style="gap:8px">
+    <button onclick="checkAll(this)" class="btn btn-secondary">全部检测</button>
+    <button onclick="document.getElementById('add-modal').classList.remove('hidden')" class="btn btn-primary">+ 添加频道</button>
   </div>
+</div>
 
-  <div class="bg-gray-800 rounded-xl shadow-lg overflow-hidden">
-    <div class="p-4 border-b border-gray-700">
-      <h3 class="text-lg font-semibold">频道列表（<%= channels.length %> 个）</h3>
-    </div>
-    <div class="overflow-x-auto">
-      <table class="w-full">
-        <thead class="bg-gray-700">
+<% if (typeof error !== 'undefined' && error) { %>
+  <div class="alert alert-error section"><%= error %></div>
+<% } %>
+
+<div class="alert alert-info section">
+  每 5 分钟自动检测一次开播状态（需要至少一台在线 VPS 提供 yt-dlp 支持）。开播后若开启「自动启动」，将自动创建并启动转推任务。
+</div>
+
+<div class="card section">
+  <div class="card-header">
+    <span class="card-title">频道列表（<%= channels.length %> 个）</span>
+  </div>
+  <div style="overflow-x:auto">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>状态</th>
+          <th>频道名称</th>
+          <th>平台</th>
+          <th>直播间 URL</th>
+          <th>最后检测</th>
+          <th>自动启动</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (channels.length === 0) { %>
           <tr>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">状态</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">频道名称</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">平台</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">直播间 URL</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">最后检测</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">自动启动</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">操作</th>
+            <td colspan="7" style="text-align:center;padding:32px 16px;color:var(--text-3)">
+              暂无频道，点击右上角添加
+            </td>
           </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-700">
-          <% if (channels.length === 0) { %>
-            <tr><td colspan="7" class="px-4 py-8 text-center text-gray-500">暂无频道，点击右上角添加</td></tr>
-          <% } %>
-          <% channels.forEach(function(ch) {
-            const statusMap = {
-              live:    { dot: 'bg-red-500 animate-pulse', text: 'text-red-400',    label: '直播中' },
-              offline: { dot: 'bg-gray-500',              text: 'text-gray-400',   label: '未开播' },
-              unknown: { dot: 'bg-yellow-500',            text: 'text-yellow-400', label: '未检测' },
-            };
-            const s = statusMap[ch.live_status] || statusMap.unknown;
-            const platformIcon = {
-              douyin:   '🎵 抖音',
-              bilibili: '📺 B站',
-              kuaishou: '⚡ 快手',
-              youtube:  '▶️ YouTube',
-              tiktok:   '🎵 TikTok',
-              custom:   '📡 其他',
-            };
-          %>
-            <tr class="hover:bg-gray-750" id="ch-row-<%= ch.id %>">
-              <td class="px-4 py-3">
-                <div class="flex items-center space-x-2">
-                  <span class="inline-block w-3 h-3 <%= s.dot %> rounded-full" id="ch-dot-<%= ch.id %>"></span>
-                  <span class="text-sm <%= s.text %>" id="ch-label-<%= ch.id %>"><%= s.label %></span>
-                </div>
-              </td>
-              <td class="px-4 py-3 text-sm font-medium"><%= ch.name %></td>
-              <td class="px-4 py-3 text-sm text-gray-300"><%= platformIcon[ch.platform] || ch.platform %></td>
-              <td class="px-4 py-3 text-sm max-w-xs">
-                <a href="<%= ch.url %>" target="_blank" class="block truncate text-sky-400 hover:text-sky-300" title="<%= ch.url %>">
-                  <%= ch.url %>
-                </a>
-              </td>
-              <td class="px-4 py-3 text-xs text-gray-400" id="ch-check-<%= ch.id %>">
-                <%= ch.last_check ? new Date(ch.last_check + 'Z').toLocaleString('zh-CN') : '--' %>
-              </td>
-              <td class="px-4 py-3">
+        <% } %>
+        <% channels.forEach(function(ch) {
+          const statusMap = {
+            live:    { dotColor: '#f87171', badgeCls: 'badge-red',    label: '直播中', pulse: true  },
+            offline: { dotColor: '#6b7280', badgeCls: 'badge-gray',   label: '未开播', pulse: false },
+            unknown: { dotColor: '#fbbf24', badgeCls: 'badge-yellow', label: '未检测', pulse: false },
+          };
+          const s = statusMap[ch.live_status] || statusMap.unknown;
+          const platformLabel = {
+            douyin:   '抖音',
+            bilibili: 'B站',
+            kuaishou: '快手',
+            youtube:  'YouTube',
+            tiktok:   'TikTok',
+            custom:   '其他',
+          };
+        %>
+          <tr id="ch-row-<%= ch.id %>">
+            <td>
+              <div class="flex" style="align-items:center;gap:8px">
+                <span class="badge-dot <%= s.pulse ? 'pulse' : '' %>" id="ch-dot-<%= ch.id %>" style="background:<%= s.dotColor %>"></span>
+                <span class="badge <%= s.badgeCls %>" id="ch-label-<%= ch.id %>"><%= s.label %></span>
+              </div>
+            </td>
+            <td style="font-weight:500;color:var(--text-1)"><%= ch.name %></td>
+            <td style="color:var(--text-2)"><%= platformLabel[ch.platform] || ch.platform %></td>
+            <td style="max-width:220px">
+              <a href="<%= ch.url %>" target="_blank" class="link" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="<%= ch.url %>">
+                <%= ch.url %>
+              </a>
+            </td>
+            <td style="color:var(--text-3);font-size:12px" id="ch-check-<%= ch.id %>">
+              <%= ch.last_check ? new Date(ch.last_check + 'Z').toLocaleString('zh-CN') : '--' %>
+            </td>
+            <td>
+              <div class="flex" style="align-items:center;gap:6px">
+                <!-- 自定义 toggle 开关 -->
                 <button onclick="toggleAuto(<%= ch.id %>, this)"
-                  class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none <%= ch.auto_start ? 'bg-emerald-600' : 'bg-gray-600' %>"
-                  title="<%= ch.auto_start ? '自动启动已开启' : '自动启动已关闭' %>">
-                  <span class="inline-block h-3 w-3 transform rounded-full bg-white transition-transform <%= ch.auto_start ? 'translate-x-5' : 'translate-x-1' %>"></span>
+                  id="ch-toggle-<%= ch.id %>"
+                  title="<%= ch.auto_start ? '自动启动已开启，点击关闭' : '自动启动已关闭，点击开启' %>"
+                  style="position:relative;display:inline-flex;width:36px;height:20px;align-items:center;border-radius:10px;border:none;cursor:pointer;transition:background .2s;background:<%= ch.auto_start ? '#6366f1' : 'rgba(255,255,255,0.12)' %>;flex-shrink:0">
+                  <span style="position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;transition:left .2s;left:<%= ch.auto_start ? '19px' : '3px' %>"></span>
                 </button>
                 <% if (ch.auto_start && ch.vps_name) { %>
-                  <span class="text-xs text-gray-500 ml-1">→ <%= ch.vps_name %></span>
+                  <span style="font-size:11px;color:var(--text-3)">→ <%= ch.vps_name %></span>
                 <% } %>
-              </td>
-              <td class="px-4 py-3">
-                <div class="flex items-center space-x-2">
-                  <button onclick="checkOne(<%= ch.id %>, this)"
-                    class="text-blue-400 hover:text-blue-300 text-sm px-2 py-1 rounded border border-blue-800 hover:border-blue-600 transition-colors">
-                    检测
-                  </button>
-                  <button onclick="useUrl(this.dataset.url)" data-url="<%= ch.url %>"
-                    class="text-emerald-400 hover:text-emerald-300 text-sm px-2 py-1 rounded border border-emerald-800 hover:border-emerald-600 transition-colors">
-                    用此URL
-                  </button>
-                  <form method="POST" action="/channels/<%= ch.id %>/delete" data-name="<%= ch.name %>" onsubmit="return confirm('确认删除「' + this.dataset.name + '」？')">
-                    <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-                    <button type="submit" class="text-red-400 hover:text-red-300 text-sm px-2 py-1 rounded border border-red-900 hover:border-red-700 transition-colors">
-                      删除
-                    </button>
-                  </form>
-                </div>
-              </td>
-            </tr>
-          <% }); %>
-        </tbody>
-      </table>
+              </div>
+            </td>
+            <td>
+              <div class="flex" style="align-items:center;gap:6px;flex-wrap:wrap">
+                <button onclick="checkOne(<%= ch.id %>, this)" class="btn btn-secondary btn-sm">检测</button>
+                <button onclick="openEdit(<%- JSON.stringify(ch) %>)" class="btn btn-secondary btn-sm">编辑</button>
+                <button onclick="useUrl(this.dataset.url)" data-url="<%= ch.url %>" class="btn btn-secondary btn-sm" style="color:#34d399;border-color:rgba(52,211,153,0.3)">用此URL</button>
+                <form method="POST" action="/channels/<%= ch.id %>/delete" data-name="<%= ch.name %>" onsubmit="return confirm('确认删除「' + this.dataset.name + '」？')" style="margin:0">
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                  <button type="submit" class="btn btn-danger btn-sm">删除</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 编辑频道弹窗 -->
+<div id="edit-modal" class="modal-overlay hidden">
+  <div class="modal" style="max-width:520px;max-height:90vh;overflow-y:auto">
+    <div class="modal-header">
+      <span class="modal-title">编辑频道</span>
+      <button class="modal-close" onclick="document.getElementById('edit-modal').classList.add('hidden')">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="edit-form" class="stack" onsubmit="saveEdit(event)">
+        <input type="hidden" id="edit-id">
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px">
+          <div>
+            <label class="form-label">频道名称 *</label>
+            <input id="edit-name" name="name" required placeholder="如：某主播抖音" class="form-input">
+          </div>
+          <div>
+            <label class="form-label">平台</label>
+            <select id="edit-platform" name="platform" class="form-select">
+              <option value="douyin">抖音</option>
+              <option value="bilibili">B站</option>
+              <option value="kuaishou">快手</option>
+              <option value="youtube">YouTube</option>
+              <option value="tiktok">TikTok</option>
+              <option value="custom">其他</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="form-label">直播间 URL *</label>
+          <input id="edit-url" name="url" required placeholder="https://live.douyin.com/xxxxx" class="form-input">
+        </div>
+
+        <div style="border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:16px" class="stack">
+          <div class="flex" style="align-items:center;gap:8px">
+            <input type="checkbox" id="edit-auto-start-cb" onchange="toggleEditAutoFields(this.checked)"
+              style="width:16px;height:16px;accent-color:#6366f1;cursor:pointer">
+            <label for="edit-auto-start-cb" class="form-label" style="margin:0;cursor:pointer">开播时自动启动转推任务</label>
+          </div>
+          <div id="edit-auto-fields" class="hidden stack">
+            <div>
+              <label class="form-label">使用 VPS</label>
+              <select id="edit-vps" name="auto_vps_id" class="form-select">
+                <option value="">-- 选择 VPS --</option>
+                <% vpsList.forEach(function(v) { %>
+                  <option value="<%= v.id %>"><%= v.name %></option>
+                <% }); %>
+              </select>
+            </div>
+            <div>
+              <label class="form-label">推流码</label>
+              <select id="edit-sk" name="auto_stream_key_id" class="form-select">
+                <option value="">-- 选择推流码 --</option>
+                <% streamKeys.forEach(function(k) { %>
+                  <option value="<%= k.id %>">[<%= k.platform %>] <%= k.name %></option>
+                <% }); %>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label class="form-label">备注</label>
+          <input id="edit-notes" name="notes" placeholder="可选" class="form-input">
+        </div>
+        <div class="flex" style="justify-content:flex-end;gap:8px;padding-top:4px">
+          <button type="button" onclick="document.getElementById('edit-modal').classList.add('hidden')" class="btn btn-secondary">取消</button>
+          <button type="submit" class="btn btn-primary">保存</button>
+        </div>
+      </form>
     </div>
   </div>
 </div>
 
 <!-- 添加频道弹窗 -->
-<div id="add-modal" class="hidden fixed inset-0 bg-black bg-opacity-60 z-40 flex items-center justify-center p-4">
-  <div class="bg-gray-800 rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-    <div class="flex items-center justify-between p-6 border-b border-gray-700">
-      <h3 class="text-lg font-semibold">添加直播频道</h3>
-      <button onclick="document.getElementById('add-modal').classList.add('hidden')" class="text-gray-400 hover:text-white text-xl">✕</button>
+<div id="add-modal" class="modal-overlay hidden">
+  <div class="modal" style="max-width:520px;max-height:90vh;overflow-y:auto">
+    <div class="modal-header">
+      <span class="modal-title">添加直播频道</span>
+      <button class="modal-close" onclick="document.getElementById('add-modal').classList.add('hidden')">✕</button>
     </div>
-    <form method="POST" action="/channels" class="p-6 space-y-4">
-      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-      <div class="grid grid-cols-2 gap-4">
-        <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1">频道名称 *</label>
-          <input name="name" required placeholder="如：某主播抖音"
-            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1">平台</label>
-          <select name="platform"
-            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-            <option value="douyin">🎵 抖音</option>
-            <option value="bilibili">📺 B站</option>
-            <option value="kuaishou">⚡ 快手</option>
-            <option value="youtube">▶️ YouTube</option>
-            <option value="tiktok">🎵 TikTok</option>
-            <option value="custom">📡 其他</option>
-          </select>
-        </div>
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-gray-300 mb-1">直播间 URL *</label>
-        <input name="url" required placeholder="https://live.douyin.com/xxxxx 或 https://live.bilibili.com/xxxxx"
-          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-        <p class="text-xs text-gray-500 mt-1">支持抖音、B站、快手、YouTube 直播间固定地址</p>
-      </div>
-
-      <div class="border border-gray-700 rounded-lg p-4 space-y-3">
-        <div class="flex items-center space-x-2">
-          <input type="checkbox" name="auto_start" value="1" id="auto-start-cb" onchange="toggleAutoFields(this.checked)"
-            class="w-4 h-4 accent-emerald-500">
-          <label for="auto-start-cb" class="text-sm text-gray-300">开播时自动启动转推任务</label>
-        </div>
-        <div id="auto-fields" class="hidden space-y-3">
+    <div class="modal-body">
+      <form method="POST" action="/channels" class="stack">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px">
           <div>
-            <label class="block text-sm font-medium text-gray-300 mb-1">使用 VPS</label>
-            <select name="auto_vps_id"
-              class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-              <option value="">-- 选择 VPS --</option>
-              <% vpsList.forEach(function(v) { %>
-                <option value="<%= v.id %>"><%= v.name %></option>
-              <% }); %>
-            </select>
+            <label class="form-label">频道名称 *</label>
+            <input name="name" required placeholder="如：某主播抖音" class="form-input">
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-300 mb-1">推流码</label>
-            <select name="auto_stream_key_id"
-              class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-              <option value="">-- 选择推流码 --</option>
-              <% streamKeys.forEach(function(k) { %>
-                <option value="<%= k.id %>">[<%= k.platform %>] <%= k.name %></option>
-              <% }); %>
+            <label class="form-label">平台</label>
+            <select name="platform" class="form-select">
+              <option value="douyin">抖音</option>
+              <option value="bilibili">B站</option>
+              <option value="kuaishou">快手</option>
+              <option value="youtube">YouTube</option>
+              <option value="tiktok">TikTok</option>
+              <option value="custom">其他</option>
             </select>
           </div>
         </div>
-      </div>
+        <div>
+          <label class="form-label">直播间 URL *</label>
+          <input name="url" required placeholder="https://live.douyin.com/xxxxx 或 https://live.bilibili.com/xxxxx" class="form-input">
+          <p class="form-hint">支持抖音、B站、快手、YouTube 直播间固定地址</p>
+        </div>
 
-      <div>
-        <label class="block text-sm font-medium text-gray-300 mb-1">备注</label>
-        <input name="notes" placeholder="可选"
-          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-      </div>
-      <div class="flex justify-end space-x-3 pt-2">
-        <button type="button" onclick="document.getElementById('add-modal').classList.add('hidden')"
-          class="px-4 py-2 text-gray-400 hover:text-white text-sm transition-colors">取消</button>
-        <button type="submit"
-          class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors">保存</button>
-      </div>
-    </form>
+        <div style="border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:16px" class="stack">
+          <div class="flex" style="align-items:center;gap:8px">
+            <input type="checkbox" name="auto_start" value="1" id="auto-start-cb" onchange="toggleAutoFields(this.checked)"
+              style="width:16px;height:16px;accent-color:#6366f1;cursor:pointer">
+            <label for="auto-start-cb" class="form-label" style="margin:0;cursor:pointer">开播时自动启动转推任务</label>
+          </div>
+          <div id="auto-fields" class="hidden stack">
+            <div>
+              <label class="form-label">使用 VPS</label>
+              <select name="auto_vps_id" class="form-select">
+                <option value="">-- 选择 VPS --</option>
+                <% vpsList.forEach(function(v) { %>
+                  <option value="<%= v.id %>"><%= v.name %></option>
+                <% }); %>
+              </select>
+            </div>
+            <div>
+              <label class="form-label">推流码</label>
+              <select name="auto_stream_key_id" class="form-select">
+                <option value="">-- 选择推流码 --</option>
+                <% streamKeys.forEach(function(k) { %>
+                  <option value="<%= k.id %>">[<%= k.platform %>] <%= k.name %></option>
+                <% }); %>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label class="form-label">备注</label>
+          <input name="notes" placeholder="可选" class="form-input">
+        </div>
+        <div class="flex" style="justify-content:flex-end;gap:8px;padding-top:4px">
+          <button type="button" onclick="document.getElementById('add-modal').classList.add('hidden')" class="btn btn-secondary">取消</button>
+          <button type="submit" class="btn btn-primary">保存</button>
+        </div>
+      </form>
+    </div>
   </div>
 </div>
 
@@ -236,18 +295,19 @@ async function checkAll(btn) {
 }
 
 function updateRowStatus(id, status) {
-  const dotEl = document.getElementById('ch-dot-' + id);
+  const dotEl   = document.getElementById('ch-dot-'   + id);
   const labelEl = document.getElementById('ch-label-' + id);
   const checkEl = document.getElementById('ch-check-' + id);
   if (!dotEl) return;
   const map = {
-    live:    { dot: 'bg-red-500 animate-pulse',  cls: 'text-red-400',    label: '直播中' },
-    offline: { dot: 'bg-gray-500',               cls: 'text-gray-400',   label: '未开播' },
-    unknown: { dot: 'bg-yellow-500',             cls: 'text-yellow-400', label: '未检测' },
+    live:    { dotColor: '#f87171', badgeCls: 'badge badge-red',    label: '直播中', pulse: true  },
+    offline: { dotColor: '#6b7280', badgeCls: 'badge badge-gray',   label: '未开播', pulse: false },
+    unknown: { dotColor: '#fbbf24', badgeCls: 'badge badge-yellow', label: '未检测', pulse: false },
   };
   const s = map[status] || map.unknown;
-  dotEl.className = 'inline-block w-3 h-3 ' + s.dot + ' rounded-full';
-  labelEl.className = 'text-sm ' + s.cls;
+  dotEl.style.background = s.dotColor;
+  dotEl.className = 'badge-dot' + (s.pulse ? ' pulse' : '');
+  labelEl.className = s.badgeCls;
   labelEl.textContent = s.label;
   if (checkEl) checkEl.textContent = new Date().toLocaleString('zh-CN');
 }
@@ -258,11 +318,63 @@ async function toggleAuto(id, btn) {
     const d = await r.json();
     if (d.ok) {
       const on = d.auto_start === 1;
-      btn.className = btn.className.replace(/bg-(emerald|gray)-600/, on ? 'bg-emerald-600' : 'bg-gray-600');
-      btn.querySelector('span').className = btn.querySelector('span').className.replace(/translate-x-\d/, on ? 'translate-x-5' : 'translate-x-1');
+      btn.style.background = on ? '#6366f1' : 'rgba(255,255,255,0.12)';
+      btn.title = on ? '自动启动已开启，点击关闭' : '自动启动已关闭，点击开启';
+      const knob = btn.querySelector('span');
+      if (knob) knob.style.left = on ? '19px' : '3px';
       showToast(on ? '已开启自动启动' : '已关闭自动启动', 'info');
     }
   } catch(e) { showToast('操作失败', 'error'); }
+}
+
+function openEdit(ch) {
+  document.getElementById('edit-id').value = ch.id;
+  document.getElementById('edit-name').value = ch.name || '';
+  document.getElementById('edit-url').value = ch.url || '';
+  document.getElementById('edit-notes').value = ch.notes || '';
+  const platSel = document.getElementById('edit-platform');
+  platSel.value = ch.platform || 'douyin';
+  const autoOn = !!ch.auto_start;
+  document.getElementById('edit-auto-start-cb').checked = autoOn;
+  toggleEditAutoFields(autoOn);
+  if (autoOn) {
+    document.getElementById('edit-vps').value = ch.auto_vps_id || '';
+    document.getElementById('edit-sk').value = ch.auto_stream_key_id || '';
+  }
+  document.getElementById('edit-modal').classList.remove('hidden');
+}
+
+function toggleEditAutoFields(show) {
+  document.getElementById('edit-auto-fields').classList.toggle('hidden', !show);
+}
+
+async function saveEdit(e) {
+  e.preventDefault();
+  const id = document.getElementById('edit-id').value;
+  const body = {
+    name: document.getElementById('edit-name').value,
+    platform: document.getElementById('edit-platform').value,
+    url: document.getElementById('edit-url').value,
+    notes: document.getElementById('edit-notes').value,
+    auto_start: document.getElementById('edit-auto-start-cb').checked ? '1' : '0',
+    auto_vps_id: document.getElementById('edit-vps').value,
+    auto_stream_key_id: document.getElementById('edit-sk').value,
+  };
+  try {
+    const r = await fetch('/channels/' + id + '/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      document.getElementById('edit-modal').classList.add('hidden');
+      showToast('频道已更新', 'success');
+      setTimeout(() => location.reload(), 800);
+    } else {
+      showToast(d.msg || '保存失败', 'error');
+    }
+  } catch(e) { showToast('请求失败', 'error'); }
 }
 
 function useUrl(url) {

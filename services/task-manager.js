@@ -36,71 +36,52 @@ function dqEsc(s) {
 function buildCommand(task) {
   const dest = `${dqEsc(task.rtmp_url)}/${dqEsc(task.stream_key)}`;
   const logFile = `/tmp/restream_${task.id}.log`;
-  const ffmpegEncode = `-c:v libx264 -preset veryfast -b:v 6000k -maxrate 6500k -bufsize 12000k -c:a aac -b:a 192k -max_interleave_delta 0`;
 
   let inner;
   if (task.source_url.startsWith('/')) {
-    // 媒体库文件：循环推送
+    // 媒体库文件：循环推送，不需要重新解析
     inner = `ffmpeg -stream_loop -1 -re -i "${dqEsc(task.source_url)}" -c:v copy -c:a copy -f flv "${dest}"`;
-
-  } else if (task._resolvedStreamUrl) {
-    // 平台 API 已解析出直链（抖音等），直接给 FFmpeg
-    const isHls = task._resolvedStreamUrl.includes('.m3u8');
-    const reFlag = isHls ? '-re' : '';
-    const isDouyin = /douyincdn\.com|douyin\.com/i.test(task._resolvedStreamUrl);
-    const hdrs = isDouyin
-      ? `-headers "Referer: https://live.douyin.com/\\r\\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\\r\\n"`
-      : '';
-    const ffmpegCmd = [
-      `ffmpeg`, reFlag, hdrs,
-      `-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10`,
-      `-i "${dqEsc(task._resolvedStreamUrl)}"`,
-      ffmpegEncode,
-      `-f flv "${dest}"`,
-    ].filter(Boolean).join(' ');
-    inner = [
-      `echo "[直链-${isHls ? 'HLS' : 'FLV'}] ${dqEsc(task._resolvedStreamUrl).substring(0, 80)}..."`,
-      ffmpegCmd,
-    ].join('; ');
-
-  } else if (task._douyinCookieFile) {
-    // 抖音直播：streamlink 获取直链，再由 FFmpeg 直连
-    const srcUrl = dqEsc(task.source_url);
-    const ckFile = task._douyinCookieFile;
-    const slLogFile = `/tmp/sl_${task.id}.log`;
-    const douyinHdrs = `-headers "Referer: https://live.douyin.com/\\r\\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\\r\\n"`;
-    const pyCmd = `python3 -c "import subprocess,sys; ck=open('${ckFile}').read(); args=['streamlink','--stream-url']+sum([['--http-cookie',c.strip()] for c in ck.split(';') if c.strip() and '=' in c.strip()],[])+['${srcUrl}','best']; r=subprocess.run(args,capture_output=True,text=True); open('${slLogFile}','w').write(r.stderr); print(r.stdout.strip(),end='')"`;
-    inner = [
-      `echo "[streamlink] 获取抖音直链: ${srcUrl}"`,
-      `SL_URL=$(${pyCmd})`,
-      `if [ -z "$SL_URL" ]; then echo "[错误] streamlink 获取直链失败，原因如下:"; cat ${slLogFile}; exit 1; fi`,
-      `echo "[streamlink] 直链: $SL_URL"`,
-      `ffmpeg -re -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 ${douyinHdrs} -i "$SL_URL" ${ffmpegEncode} -f flv "${dest}"`,
-    ].join('; ');
-
   } else {
-    // 通用：yt-dlp 提取直链
+    // 网络直播：循环解析直链 + 推流（直链过期或 ffmpeg 退出后自动重新获取）
+    const isDouyin = /douyin\.com/i.test(task.source_url);
+    const ckArg   = task._douyinCookieFile ? `--cookies "${task._douyinCookieFile}"` : '';
+    const ytHdrs  = isDouyin
+      ? `--add-header "Referer: https://live.douyin.com/" --add-header "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"`
+      : '';
+    const ffmpegHdrs = isDouyin
+      ? `-headers "Referer: https://live.douyin.com/\\r\\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\\r\\n"`
+      : '';
+
     const allUrls = [task.source_url];
     if (task.backup_urls) {
       task.backup_urls.split('\n').forEach(u => { u = u.trim(); if (u) allUrls.push(u); });
     }
-    if (allUrls.length === 1) {
-      inner = [
-        `STREAM_URL=$(yt-dlp --no-warnings -f "best" -g "${dqEsc(task.source_url)}" | grep -m1 '^https\\?://')`,
-        `echo "[yt-dlp] 直链: $STREAM_URL"`,
-        `if [ -z "$STREAM_URL" ]; then echo "[错误] yt-dlp 提取失败"; exit 1; fi`,
-        `ffmpeg -re -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -i "$STREAM_URL" ${ffmpegEncode} -f flv "${dest}"`,
-      ].join('; ');
-    } else {
-      const urlsArr = allUrls.map(u => `"${dqEsc(u)}"`).join(' ');
-      inner = [
-        `STREAM_URL=""`,
-        `for _SRC in ${urlsArr}; do STREAM_URL=$(yt-dlp --no-warnings -f "best" -g "$_SRC" 2>/dev/null | grep -m1 '^https\\?://'); if [ -n "$STREAM_URL" ]; then echo "[yt-dlp] 使用源: $_SRC"; break; fi; done`,
-        `if [ -z "$STREAM_URL" ]; then echo "[错误] 所有源均提取失败"; exit 1; fi`,
-        `echo "[yt-dlp] 直链: $STREAM_URL"`,
-        `ffmpeg -re -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -i "$STREAM_URL" ${ffmpegEncode} -f flv "${dest}"`,
-      ].join('; ');
-    }
+    const urlsArr = allUrls.map(u => `"${dqEsc(u)}"`).join(' ');
+
+    // 如果 API 已解析出直链，第一次优先使用它（更快），之后循环用 yt-dlp 续期
+    const firstUrl = task._resolvedStreamUrl ? dqEsc(task._resolvedStreamUrl) : '';
+
+    inner = [
+      `_FIRST=1`,
+      `while true; do`,
+      `  if [ "$_FIRST" = "1" ] && [ -n "${firstUrl}" ]; then`,
+      `    STREAM_URL="${firstUrl}"`,
+      `    echo "[直链-API] ${firstUrl.substring(0, 80)}..."`,
+      `    _FIRST=0`,
+      `  else`,
+      `    STREAM_URL=""`,
+      `    for _SRC in ${urlsArr}; do`,
+      `      STREAM_URL=$(yt-dlp --no-warnings ${ckArg} ${ytHdrs} -f "best" -g "$_SRC" 2>/dev/null | grep -m1 '^https\\?://')`,
+      `      if [ -n "$STREAM_URL" ]; then echo "[yt-dlp] 使用源: $_SRC"; break; fi`,
+      `    done`,
+      `  fi`,
+      `  if [ -z "$STREAM_URL" ]; then echo "[错误] 无法获取直链，15s 后重试..."; sleep 15; continue; fi`,
+      `  echo "[推流] $STREAM_URL"`,
+      `  ffmpeg -re ${ffmpegHdrs} -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -i "$STREAM_URL" -c:v copy -c:a copy -f flv "${dest}" || true`,
+      `  echo "[退出] ffmpeg 退出，3s 后重新获取直链..."`,
+      `  sleep 3`,
+      `done`,
+    ].join('\n');
   }
 
   const scriptB64 = Buffer.from(inner).toString('base64');
@@ -266,6 +247,31 @@ async function checkHealth(task) {
       }
     }
 
+    // 检测 RTMP 推流目标断开（YouTube/TikTok 主动断流、推流码失效等）
+    // FFmpeg 遇到这类错误会在日志中留下特征词，连续出现说明一直在重连而推不上去
+    const isRtmpError = /failed to update header|broken pipe|connection reset|rtmp.*error|error.*rtmp|av_interleaved_write_frame.*-32|end of file|error muxing a packet/i.test(logTail);
+    if (isRtmpError) {
+      const newStallCount = (task.stall_count || 0) + 1;
+      console.warn(`[健康监控] 任务 ${task.id} 检测到 RTMP 推流错误（可能目标端断流），stall=${newStallCount}`);
+      db.prepare('UPDATE tasks SET stall_count=? WHERE id=?').run(newStallCount, task.id);
+      // 允许短暂断流重试（最多 3 次 ≈ 90s），超过则停止
+      if (newStallCount >= 3) {
+        console.error(`[健康监控] 任务 ${task.id} RTMP 持续报错，自动停止`);
+        await stopTask(task.id).catch(() => {});
+        db.prepare("UPDATE tasks SET status='error', remote_pid=NULL WHERE id=?").run(task.id);
+        return;
+      }
+      if (task.status !== 'stalled') {
+        db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
+      }
+      return;
+    }
+
+    // 检测 yt-dlp 无法获取直链的重试循环（脚本还活着但推流已停止）
+    const logLines = logTail.split('|');
+    const retryErrLines = logLines.filter(l => l.includes('无法获取直链'));
+    const isRetryLoop = retryErrLines.length >= 2; // 最近 3 行中 ≥2 行是重试错误
+
     if (procStatus === 'dead') {
       // 进程已死
       if (task.auto_restart) {
@@ -278,23 +284,35 @@ async function checkHealth(task) {
       return;
     }
 
-    if (stale) {
-      // 进程活着但日志停止写入（拉流卡死）
+    if (stale || isRetryLoop) {
+      const reason = stale ? `日志 ${now - mtime}s 无更新` : '无法获取直链';
       const newStallCount = (task.stall_count || 0) + 1;
-      console.log(`[健康监控] 任务 ${task.id} 日志 ${now - mtime}s 无更新，stall=${newStallCount}`);
+      console.log(`[健康监控] 任务 ${task.id} ${reason}，stall=${newStallCount}`);
       db.prepare('UPDATE tasks SET stall_count=? WHERE id=?').run(newStallCount, task.id);
 
+      // 重试循环：允许最多 10 次（≈5分钟）再处理，为短暂断播留余地
+      const retryThreshold = isRetryLoop && !stale ? 10 : 1;
+      if (newStallCount < retryThreshold) {
+        // 更新显示状态为 stalled，但暂不杀进程
+        if (task.status !== 'stalled') {
+          db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
+        }
+        return;
+      }
+
       if (task.auto_restart) {
-        console.log(`[健康监控] 任务 ${task.id} 自动重启（卡死）`);
+        console.log(`[健康监控] 任务 ${task.id} 自动重启（${reason}）`);
         await stopTask(task.id).catch(() => {});
         db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
         startTaskQueued(task.id, task.user_id).catch(() => {});
       } else {
-        db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
+        await stopTask(task.id).catch(() => {});
+        db.prepare("UPDATE tasks SET status='error', remote_pid=NULL WHERE id=?").run(task.id);
       }
     } else if (mtime > 0) {
-      // 正常运行，更新活跃时间，清零计数
-      db.prepare("UPDATE tasks SET last_active_at=datetime('now'), stall_count=0, block_count=0 WHERE id=?").run(task.id);
+      // 正常运行，更新活跃时间，清零计数；若之前卡过，恢复为 running
+      const statusPatch = task.status === 'stalled' ? ", status='running'" : '';
+      db.prepare(`UPDATE tasks SET last_active_at=datetime('now'), stall_count=0, block_count=0${statusPatch} WHERE id=?`).run(task.id);
     }
   } catch (_) {
     // SSH 暂时失败，不改状态

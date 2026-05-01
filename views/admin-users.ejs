@@ -1,0 +1,145 @@
+<div class="page-header">
+  <h2 class="page-title">用户管理</h2>
+  <p class="page-subtitle">管理系统用户账号与权限</p>
+</div>
+
+<% if (typeof success !== 'undefined' && success) { %>
+  <div class="alert alert-success section"><%= success %></div>
+<% } %>
+<% if (typeof error !== 'undefined' && error) { %>
+  <div class="alert alert-error section"><%= error %></div>
+<% } %>
+
+<!-- 注册设置 -->
+<div class="card section">
+  <div class="card-header">
+    <span class="card-title">注册设置</span>
+  </div>
+  <div style="padding:20px;">
+    <form method="POST" action="/admin/settings/registration" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <input type="hidden" name="allow_registration" value="<%= allowRegistration ? '0' : '1' %>">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="font-size:14px;color:var(--text-2);">允许新用户注册：</span>
+        <span class="badge <%= allowRegistration ? 'badge-green' : 'badge-gray' %>">
+          <%= allowRegistration ? '已开启' : '已关闭' %>
+        </span>
+      </div>
+      <button type="submit" class="btn <%= allowRegistration ? 'btn-secondary' : 'btn-primary' %>">
+        <%= allowRegistration ? '关闭注册' : '开启注册' %>
+      </button>
+      <span style="font-size:12px;color:var(--text-3);">
+        <% if (allowRegistration) { %>
+          开启时，任何人都可通过 <a href="/register" class="link">/register</a> 注册账号
+        <% } else { %>
+          关闭时，仅管理员可在此处创建账号
+        <% } %>
+      </span>
+    </form>
+  </div>
+</div>
+
+<!-- 用户列表 -->
+<div class="card section">
+  <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
+    <span class="card-title">用户列表（<%= users.length %> 个）</span>
+    <button onclick="document.getElementById('add-user-modal').classList.remove('hidden')"
+      class="btn btn-primary btn-sm">
+      + 新建用户
+    </button>
+  </div>
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>用户名</th>
+          <th>角色</th>
+          <th>注册时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (users.length === 0) { %>
+          <tr><td colspan="4" style="text-align:center;padding:32px;color:var(--text-3);">暂无用户</td></tr>
+        <% } %>
+        <% users.forEach(function(u) { %>
+          <tr>
+            <td>
+              <span style="font-weight:500;color:var(--text-1);"><%= u.username %></span>
+              <% if (u.id === currentUser.id) { %>
+                <span style="margin-left:6px;font-size:12px;color:var(--text-3);">（你）</span>
+              <% } %>
+            </td>
+            <td>
+              <span class="badge <%= u.role === 'admin' ? 'badge-yellow' : 'badge-gray' %>">
+                <%= u.role === 'admin' ? '管理员' : '普通用户' %>
+              </span>
+            </td>
+            <td style="font-size:12px;color:var(--text-3);">
+              <%= u.created_at ? new Date(u.created_at + (u.created_at.endsWith('Z') ? '' : 'Z')).toLocaleString('zh-CN') : '--' %>
+            </td>
+            <td>
+              <% if (u.id !== currentUser.id) { %>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <!-- 切换角色 -->
+                  <form method="POST" action="/admin/users/<%= u.id %>/role" style="margin:0;">
+                    <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                    <input type="hidden" name="role" value="<%= u.role === 'admin' ? 'user' : 'admin' %>">
+                    <button type="submit" class="btn btn-secondary btn-sm">
+                      <%= u.role === 'admin' ? '降为普通' : '升为管理员' %>
+                    </button>
+                  </form>
+                  <!-- 删除 -->
+                  <form method="POST" action="/admin/users/<%= u.id %>/delete" style="margin:0;"
+                    onsubmit="return confirm('确认删除用户「<%= u.username %>」？此操作不可撤销，该用户的所有数据将一并删除。')">
+                    <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                    <button type="submit" class="btn btn-danger btn-sm">删除</button>
+                  </form>
+                </div>
+              <% } else { %>
+                <span style="color:var(--text-3);font-size:13px;">—</span>
+              <% } %>
+            </td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 新建用户弹窗 -->
+<div id="add-user-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">新建用户</span>
+      <button class="modal-close" onclick="document.getElementById('add-user-modal').classList.add('hidden')">✕</button>
+    </div>
+    <div class="modal-body">
+      <form method="POST" action="/admin/users" style="display:flex;flex-direction:column;gap:16px;">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <div>
+          <label class="form-label">用户名 *</label>
+          <input name="username" required placeholder="字母、数字、下划线、短横线，3-32 位"
+            class="form-input">
+        </div>
+        <div>
+          <label class="form-label">初始密码 *</label>
+          <input name="password" type="password" required minlength="6" placeholder="至少 6 位"
+            class="form-input">
+        </div>
+        <div>
+          <label class="form-label">角色</label>
+          <select name="role" class="form-select">
+            <option value="user">普通用户</option>
+            <option value="admin">管理员</option>
+          </select>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:12px;padding-top:4px;">
+          <button type="button" onclick="document.getElementById('add-user-modal').classList.add('hidden')"
+            class="btn btn-secondary">取消</button>
+          <button type="submit" class="btn btn-primary">创建用户</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

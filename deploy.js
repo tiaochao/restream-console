@@ -25,6 +25,7 @@ const SOURCE_FILES = [
   'middleware/auth.js',
   'middleware/csrf.js',
   'routes/auth.js',
+  'routes/admin.js',
   'routes/channels.js',
   'routes/dashboard.js',
   'routes/logs.js',
@@ -49,8 +50,10 @@ const SOURCE_FILES = [
   'views/media.ejs',
   'views/settings.ejs',
   'views/stream-keys.ejs',
+  'views/admin-users.ejs',
   'views/log-detail.ejs',
   'views/partials/stats.ejs',
+  'check_douyin.py',
 ];
 
 function log(msg) { console.log(`[deploy] ${msg}`); }

@@ -1,181 +1,447 @@
-<div class="space-y-6">
-  <div class="flex items-center justify-between">
-    <div>
-      <h2 class="text-2xl font-bold">🖥️ VPS 管理</h2>
-      <p class="text-gray-400 text-xs mt-1">每 2 分钟自动心跳检测在线状态</p>
-    </div>
-    <div class="flex gap-2">
-      <button onclick="pingAll(this)"
-        class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-        立即检测全部
-      </button>
-      <button onclick="document.getElementById('add-modal').classList.remove('hidden')"
-        class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-        + 添加 VPS
-      </button>
-    </div>
+<div class="page-header">
+  <div>
+    <h2 class="page-title">VPS 管理</h2>
+    <p class="page-subtitle">每 2 分钟自动心跳检测在线状态</p>
   </div>
+  <div class="flex" style="gap:8px">
+    <button onclick="pingAll(this)" class="btn btn-secondary">立即检测全部</button>
+    <button onclick="document.getElementById('add-modal').classList.remove('hidden')" class="btn btn-primary">+ 添加 VPS</button>
+  </div>
+</div>
 
-  <% if (typeof error !== 'undefined' && error) { %>
-    <div class="px-4 py-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"><%= error %></div>
-  <% } %>
+<% if (typeof error !== 'undefined' && error) { %>
+  <div class="alert alert-error section"><%= error %></div>
+<% } %>
 
-  <div class="bg-gray-800 rounded-xl shadow-lg overflow-hidden">
-    <div class="p-4 border-b border-gray-700">
-      <h3 class="text-lg font-semibold">服务器列表（<%= vpsList.length %> 台）</h3>
-    </div>
-    <div class="overflow-x-auto">
-      <table class="w-full">
-        <thead class="bg-gray-700">
+<div class="card section">
+  <div class="card-header">
+    <span class="card-title">服务器列表（<%= vpsList.length %> 台）</span>
+  </div>
+  <div style="overflow-x:auto">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>状态</th>
+          <th>名称</th>
+          <th>主机</th>
+          <th>端口</th>
+          <th>用户</th>
+          <th>认证</th>
+          <th>最后检测</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (vpsList.length === 0) { %>
           <tr>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">状态</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">名称</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">主机</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">端口</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">用户</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">认证</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">最后检测</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">操作</th>
+            <td colspan="8" style="text-align:center;padding:32px 16px;color:var(--text-3)">
+              暂无 VPS，点击右上角添加
+            </td>
           </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-700">
-          <% if (vpsList.length === 0) { %>
-            <tr><td colspan="8" class="px-4 py-8 text-center text-gray-500">暂无 VPS，点击右上角添加</td></tr>
-          <% } %>
-          <% vpsList.forEach(function(v) {
-            const statusCls = { online:'bg-emerald-500', offline:'bg-red-500', unknown:'bg-gray-500' };
-            const statusLabel = { online:'在线', offline:'离线', unknown:'未知' };
-          %>
-            <tr class="hover:bg-gray-750">
-              <td class="px-4 py-3">
-                <div class="flex items-center space-x-2">
-                  <span class="inline-block w-3 h-3 <%= statusCls[v.status] || 'bg-gray-500' %> rounded-full"></span>
-                  <span class="text-sm text-gray-300"><%= statusLabel[v.status] || '未知' %></span>
-                </div>
-              </td>
-              <td class="px-4 py-3 text-sm font-medium"><%= v.name %></td>
-              <td class="px-4 py-3 text-sm font-mono text-gray-300"><%= v.host %></td>
-              <td class="px-4 py-3 text-sm text-gray-300"><%= v.port %></td>
-              <td class="px-4 py-3 text-sm text-gray-300"><%= v.username %></td>
-              <td class="px-4 py-3 text-sm text-gray-400"><%= v.auth_type === 'key' ? '密钥' : '密码' %></td>
-              <td class="px-4 py-3 text-sm text-gray-400">
-                <%= v.last_check ? new Date(v.last_check).toLocaleString('zh-CN') : '--' %>
-              </td>
-              <td class="px-4 py-3">
-                <div class="flex items-center space-x-2 flex-wrap gap-y-1">
-                  <button onclick="testVps(<%= v.id %>, this)"
-                    class="text-blue-400 hover:text-blue-300 text-sm px-2 py-1 rounded border border-blue-800 hover:border-blue-600 transition-colors">
-                    测试连接
-                  </button>
-                  <button onclick="installDeps(<%= v.id %>, this)"
-                    class="text-amber-400 hover:text-amber-300 text-sm px-2 py-1 rounded border border-amber-800 hover:border-amber-600 transition-colors">
-                    安装依赖
-                  </button>
-                  <form method="POST" action="/vps/<%= v.id %>/delete" onsubmit="return confirm('确认删除 <%= v.name %>？')">
-                    <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-                    <button type="submit" class="text-red-400 hover:text-red-300 text-sm px-2 py-1 rounded border border-red-900 hover:border-red-700 transition-colors">
-                      删除
-                    </button>
-                  </form>
-                </div>
-              </td>
-            </tr>
-          <% }); %>
-        </tbody>
-      </table>
+        <% } %>
+        <% vpsList.forEach(function(v) {
+          const statusColor = { online:'#34d399', offline:'#f87171', unknown:'#6b7280' };
+          const statusLabel = { online:'在线', offline:'离线', unknown:'未知' };
+          const badgeCls = { online:'badge-green', offline:'badge-red', unknown:'badge-gray' };
+          const color = statusColor[v.status] || statusColor.unknown;
+        %>
+          <tr>
+            <td>
+              <div class="flex" style="align-items:center;gap:8px">
+                <% if (v.status === 'online') { %>
+                  <span class="badge-dot pulse" style="background:<%= color %>"></span>
+                <% } else { %>
+                  <span class="badge-dot" style="background:<%= color %>"></span>
+                <% } %>
+                <span class="badge badge-<%= badgeCls[v.status] || 'gray' %>"><%= statusLabel[v.status] || '未知' %></span>
+              </div>
+            </td>
+            <td style="font-weight:500;color:var(--text-1)"><%= v.name %></td>
+            <td style="font-family:monospace;color:var(--text-2)"><%= v.host %></td>
+            <td style="color:var(--text-2)"><%= v.port %></td>
+            <td style="color:var(--text-2)"><%= v.username %></td>
+            <td style="color:var(--text-3)"><%= v.auth_type === 'key' ? '密钥' : '密码' %></td>
+            <td style="color:var(--text-3);font-size:12px">
+              <%= v.last_check ? new Date(v.last_check).toLocaleString('zh-CN') : '--' %>
+            </td>
+            <td>
+              <div class="flex" style="align-items:center;gap:6px;flex-wrap:wrap">
+                <button onclick="openMgr(<%= v.id %>, '<%= v.name.replace(/'/g, '') %>')" class="btn btn-primary btn-sm">管理</button>
+                <button onclick="testVps(<%= v.id %>, this)" class="btn btn-secondary btn-sm">测试</button>
+                <button onclick="installDeps(<%= v.id %>, this)" class="btn btn-secondary btn-sm" style="color:#fbbf24;border-color:rgba(251,191,36,0.3)">安装依赖</button>
+                <form method="POST" action="/vps/<%= v.id %>/delete" onsubmit="return confirm('确认删除 <%= v.name %>？')" style="margin:0">
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                  <button type="submit" class="btn btn-danger btn-sm">删除</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- VPS 管理面板 Modal -->
+<div id="mgr-modal" class="modal-overlay hidden">
+  <div class="modal" style="max-width:760px;width:95vw">
+    <div class="modal-header">
+      <span class="modal-title" id="mgr-title">VPS 管理</span>
+      <button class="modal-close" onclick="closeMgr()">✕</button>
+    </div>
+    <div class="modal-body stack">
+
+      <!-- 系统状态卡片 -->
+      <div id="stats-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+        <div class="stat-card" id="stat-disk">
+          <div style="font-size:11px;color:var(--text-3);margin-bottom:6px">磁盘（/）</div>
+          <div style="font-size:20px;font-weight:700;color:var(--text-1)" id="disk-pct">--</div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:4px" id="disk-detail">已用 -- / 总 --</div>
+          <div id="disk-bar" style="margin-top:8px;height:4px;border-radius:2px;background:rgba(255,255,255,0.1)">
+            <div id="disk-fill" style="height:4px;border-radius:2px;background:#34d399;width:0%;transition:width 0.5s"></div>
+          </div>
+        </div>
+        <div class="stat-card" id="stat-mem">
+          <div style="font-size:11px;color:var(--text-3);margin-bottom:6px">内存</div>
+          <div style="font-size:20px;font-weight:700;color:var(--text-1)" id="mem-pct">--</div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:4px" id="mem-detail">已用 -- / 总 --</div>
+          <div id="mem-bar" style="margin-top:8px;height:4px;border-radius:2px;background:rgba(255,255,255,0.1)">
+            <div id="mem-fill" style="height:4px;border-radius:2px;background:#60a5fa;width:0%;transition:width 0.5s"></div>
+          </div>
+        </div>
+        <div class="stat-card" id="stat-load">
+          <div style="font-size:11px;color:var(--text-3);margin-bottom:6px">负载（1m/5m/15m）</div>
+          <div style="font-size:18px;font-weight:700;color:var(--text-1)" id="load-val">--</div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:4px">系统负载均值</div>
+        </div>
+        <div class="stat-card" id="stat-uptime">
+          <div style="font-size:11px;color:var(--text-3);margin-bottom:6px">在线时长</div>
+          <div style="font-size:14px;font-weight:600;color:var(--text-1);line-height:1.4" id="uptime-val">--</div>
+        </div>
+      </div>
+
+      <div class="flex" style="gap:8px;align-items:center">
+        <button onclick="loadStats()" class="btn btn-secondary btn-sm">刷新状态</button>
+        <span id="stats-ts" style="font-size:11px;color:var(--text-3)"></span>
+      </div>
+
+      <!-- 快捷命令 -->
+      <div>
+        <div style="font-size:12px;color:var(--text-3);margin-bottom:8px">快捷命令</div>
+        <div class="flex" style="gap:6px;flex-wrap:wrap">
+          <button onclick="runCmd('df -h')" class="btn btn-secondary btn-sm">磁盘详情</button>
+          <button onclick="runCmd('free -h')" class="btn btn-secondary btn-sm">内存详情</button>
+          <button onclick="runCmd('uptime')" class="btn btn-secondary btn-sm">在线时长</button>
+          <button onclick="runCmd('ss -tulnp')" class="btn btn-secondary btn-sm">监听端口</button>
+          <button onclick="runCmd('cat /etc/os-release | head -5')" class="btn btn-secondary btn-sm">系统版本</button>
+          <button onclick="runCmd('ps aux --sort=-%cpu | head -10')" class="btn btn-secondary btn-sm">进程 Top</button>
+          <button onclick="runCmd('ip addr show')" class="btn btn-secondary btn-sm">网络接口</button>
+          <button onclick="runCmd('docker ps --format \"table {{.Names}}\\t{{.Status}}\\t{{.Ports}}\" 2>/dev/null || echo \"Docker 未运行\"')" class="btn btn-secondary btn-sm">Docker 容器</button>
+          <button onclick="runCmd('docker logs --tail 20 restream-console 2>&1 || echo \"容器不存在\"')" class="btn btn-secondary btn-sm" style="color:#10b981;border-color:rgba(16,185,129,0.3)">控制台日志</button>
+        </div>
+      </div>
+
+      <!-- Xray 管理 -->
+      <div>
+        <div style="font-size:12px;color:var(--text-3);margin-bottom:8px">Xray 管理</div>
+        <div class="flex" style="gap:6px;flex-wrap:wrap;margin-bottom:10px">
+          <button onclick="runCmd('bash -c \"\$(curl -sL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)\" @ install')" class="btn btn-secondary btn-sm" style="color:#818cf8;border-color:rgba(129,140,248,0.3)">安装 Xray</button>
+          <button onclick="runCmd('systemctl status xray --no-pager -l | head -30')" class="btn btn-secondary btn-sm" style="color:#818cf8;border-color:rgba(129,140,248,0.3)">Xray 状态</button>
+          <button onclick="runCmd('systemctl restart xray && echo 已重启 && systemctl is-active xray')" class="btn btn-secondary btn-sm" style="color:#818cf8;border-color:rgba(129,140,248,0.3)">重启 Xray</button>
+          <button onclick="runCmd('journalctl -u xray -n 30 --no-pager 2>/dev/null || cat /var/log/xray/error.log 2>/dev/null | tail -30 || echo 无日志')" class="btn btn-secondary btn-sm" style="color:#818cf8;border-color:rgba(129,140,248,0.3)">Xray 日志</button>
+          <button onclick="runCmd('xray version 2>/dev/null || echo 未安装')" class="btn btn-secondary btn-sm" style="color:#818cf8;border-color:rgba(129,140,248,0.3)">查看版本</button>
+          <button onclick="toggleSocks5Panel()" class="btn btn-sm" style="color:#f59e0b;border:1px solid rgba(245,158,11,0.4);background:rgba(245,158,11,0.08)">配置 SOCKS5 ▾</button>
+        </div>
+
+        <!-- SOCKS5 配置面板 -->
+        <div id="socks5-panel" class="hidden" style="background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:14px 16px">
+          <div style="font-size:12px;color:var(--text-2);margin-bottom:12px;font-weight:600">SOCKS5 代理配置（写入 Xray config.json 并重启）</div>
+          <div class="grid" style="grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">
+            <div>
+              <label style="font-size:11px;color:var(--text-3);display:block;margin-bottom:4px">监听端口</label>
+              <input id="s5-port" type="number" value="1080" min="1" max="65535" class="form-input" style="padding:6px 10px;font-size:13px">
+            </div>
+            <div>
+              <label style="font-size:11px;color:var(--text-3);display:block;margin-bottom:4px">用户名（留空=免认证）</label>
+              <input id="s5-user" type="text" placeholder="留空则不需密码" class="form-input" style="padding:6px 10px;font-size:13px">
+            </div>
+            <div>
+              <label style="font-size:11px;color:var(--text-3);display:block;margin-bottom:4px">密码</label>
+              <input id="s5-pass" type="text" placeholder="留空则不需密码" class="form-input" style="padding:6px 10px;font-size:13px">
+            </div>
+          </div>
+          <div class="flex" style="gap:8px;align-items:center">
+            <button onclick="applySocks5()" class="btn btn-primary btn-sm">应用配置</button>
+            <span id="s5-status" style="font-size:12px;color:var(--text-3)"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 命令终端 -->
+      <div>
+        <div style="font-size:12px;color:var(--text-3);margin-bottom:8px">命令终端</div>
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <input id="cmd-input" type="text" class="form-input" placeholder="输入命令，回车执行..." style="font-family:monospace;font-size:13px;flex:1"
+            onkeydown="if(event.key==='Enter')runCmdFromInput()">
+          <button onclick="runCmdFromInput()" class="btn btn-primary" style="white-space:nowrap">执行</button>
+          <button onclick="clearTerm()" class="btn btn-secondary" title="清空">⌫</button>
+        </div>
+        <div id="terminal" style="background:#0d0d0d;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:12px 14px;min-height:180px;max-height:360px;overflow-y:auto;font-family:monospace;font-size:12px;color:#d4d4d4;white-space:pre-wrap;word-break:break-all">
+          <span style="color:#6b7280">~ 输入命令后按回车执行，或点击上方快捷按钮</span>
+        </div>
+      </div>
+
+      <div class="flex" style="justify-content:flex-end">
+        <button onclick="closeMgr()" class="btn btn-secondary">关闭</button>
+      </div>
     </div>
   </div>
 </div>
 
 <!-- 添加 VPS 弹窗 -->
-<div id="add-modal" class="hidden fixed inset-0 bg-black bg-opacity-60 z-40 flex items-center justify-center p-4">
-  <div class="bg-gray-800 rounded-xl shadow-xl w-full max-w-lg">
-    <div class="flex items-center justify-between p-6 border-b border-gray-700">
-      <h3 class="text-lg font-semibold">添加 VPS</h3>
-      <button onclick="document.getElementById('add-modal').classList.add('hidden')" class="text-gray-400 hover:text-white text-xl">✕</button>
+<div id="add-modal" class="modal-overlay hidden">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header">
+      <span class="modal-title">添加 VPS</span>
+      <button class="modal-close" onclick="document.getElementById('add-modal').classList.add('hidden')">✕</button>
     </div>
-    <form method="POST" action="/vps" class="p-6 space-y-4">
-      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-      <div class="grid grid-cols-2 gap-4">
-        <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1">名称 *</label>
-          <input name="name" required placeholder="香港-01"
-            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+    <div class="modal-body">
+      <form method="POST" action="/vps" class="stack">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px">
+          <div>
+            <label class="form-label">名称 *</label>
+            <input name="name" required placeholder="香港-01" class="form-input">
+          </div>
+          <div>
+            <label class="form-label">主机 IP *</label>
+            <input name="host" required placeholder="1.2.3.4" class="form-input">
+          </div>
+          <div>
+            <label class="form-label">端口</label>
+            <input name="port" type="number" value="22" class="form-input">
+          </div>
+          <div>
+            <label class="form-label">用户名</label>
+            <input name="username" value="root" class="form-input">
+          </div>
         </div>
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1">主机 IP *</label>
-          <input name="host" required placeholder="1.2.3.4"
-            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+          <label class="form-label">认证方式</label>
+          <select name="auth_type" onchange="toggleAuth(this.value)" class="form-select">
+            <option value="password">密码认证</option>
+            <option value="key">SSH 私钥</option>
+          </select>
         </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1">端口</label>
-          <input name="port" type="number" value="22"
-            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+        <div id="auth-password">
+          <label class="form-label">SSH 密码</label>
+          <input name="password" type="password" placeholder="SSH 登录密码" class="form-input">
         </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1">用户名</label>
-          <input name="username" value="root"
-            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+        <div id="auth-key" class="hidden">
+          <label class="form-label">SSH 私钥内容</label>
+          <textarea name="private_key" rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" class="form-textarea" style="font-family:monospace;font-size:12px"></textarea>
         </div>
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-gray-300 mb-1">认证方式</label>
-        <select name="auth_type" onchange="toggleAuth(this.value)"
-          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-          <option value="password">密码认证</option>
-          <option value="key">SSH 私钥</option>
-        </select>
-      </div>
-      <div id="auth-password">
-        <label class="block text-sm font-medium text-gray-300 mb-1">SSH 密码</label>
-        <input name="password" type="password" placeholder="SSH 登录密码"
-          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-      </div>
-      <div id="auth-key" class="hidden">
-        <label class="block text-sm font-medium text-gray-300 mb-1">SSH 私钥内容</label>
-        <textarea name="private_key" rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-          class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
-      </div>
-      <div class="flex justify-end space-x-3 pt-2">
-        <button type="button" onclick="document.getElementById('add-modal').classList.add('hidden')"
-          class="px-4 py-2 text-gray-400 hover:text-white text-sm transition-colors">取消</button>
-        <button type="submit"
-          class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors">添加</button>
-      </div>
-    </form>
+        <div class="flex" style="justify-content:flex-end;gap:8px;padding-top:4px">
+          <button type="button" onclick="document.getElementById('add-modal').classList.add('hidden')" class="btn btn-secondary">取消</button>
+          <button type="submit" class="btn btn-primary">添加</button>
+        </div>
+      </form>
+    </div>
   </div>
 </div>
 
 <!-- 安装依赖结果弹窗 -->
-<div id="deps-modal" class="hidden fixed inset-0 bg-black bg-opacity-60 z-40 flex items-center justify-center p-4">
-  <div class="bg-gray-800 rounded-xl shadow-xl w-full max-w-lg">
-    <div class="flex items-center justify-between p-6 border-b border-gray-700">
-      <h3 class="text-lg font-semibold" id="deps-modal-title">安装依赖</h3>
-      <button onclick="document.getElementById('deps-modal').classList.add('hidden')" class="text-gray-400 hover:text-white text-xl">✕</button>
+<div id="deps-modal" class="modal-overlay hidden">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header">
+      <span class="modal-title" id="deps-modal-title">安装依赖</span>
+      <button class="modal-close" onclick="document.getElementById('deps-modal').classList.add('hidden')">✕</button>
     </div>
-    <div class="p-6 space-y-4">
-      <div id="deps-status" class="px-4 py-3 rounded-lg text-sm bg-blue-900/50 border border-blue-700 text-blue-300">
+    <div class="modal-body stack">
+      <div id="deps-status" class="alert alert-info">
         正在连接并执行安装脚本，请稍候……
       </div>
       <div id="deps-output-wrap" class="hidden">
-        <p class="text-xs text-gray-400 mb-2">安装输出：</p>
-        <pre id="deps-output" class="bg-gray-900 rounded-lg p-3 text-xs text-gray-300 overflow-auto max-h-48 whitespace-pre-wrap"></pre>
+        <p style="font-size:12px;color:var(--text-3);margin-bottom:8px">安装输出：</p>
+        <pre id="deps-output" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:12px;font-size:11px;color:var(--text-2);overflow:auto;max-height:200px;white-space:pre-wrap;font-family:monospace"></pre>
       </div>
-      <div class="flex justify-end">
-        <button onclick="document.getElementById('deps-modal').classList.add('hidden')"
-          class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm transition-colors">关闭</button>
+      <div class="flex" style="justify-content:flex-end">
+        <button onclick="document.getElementById('deps-modal').classList.add('hidden')" class="btn btn-secondary">关闭</button>
       </div>
     </div>
   </div>
 </div>
 
+<style>
+.stat-card {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+#terminal .line-out  { color: #d4d4d4; }
+#terminal .line-err  { color: #f87171; }
+#terminal .line-cmd  { color: #34d399; margin-top: 8px; }
+#terminal .line-info { color: #6b7280; font-style: italic; }
+</style>
+
 <script>
 const _csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+let _mgrVpsId = null;
+let _activeEs = null;
 
+/* ─── 管理 Modal ─── */
+function openMgr(id, name) {
+  _mgrVpsId = id;
+  document.getElementById('mgr-title').textContent = `VPS 管理 · ${name}`;
+  document.getElementById('mgr-modal').classList.remove('hidden');
+  clearTerm();
+  loadStats();
+}
+
+function closeMgr() {
+  document.getElementById('mgr-modal').classList.add('hidden');
+  if (_activeEs) { _activeEs.close(); _activeEs = null; }
+}
+
+/* ─── 系统状态 ─── */
+async function loadStats() {
+  if (!_mgrVpsId) return;
+  document.getElementById('stats-ts').textContent = '加载中...';
+  try {
+    const r = await fetch(`/vps/${_mgrVpsId}/stats`);
+    const d = await r.json();
+    if (!d.ok) { document.getElementById('stats-ts').textContent = '加载失败：' + d.msg; return; }
+
+    // 磁盘
+    const diskPct = parseInt(d.disk.pct) || 0;
+    document.getElementById('disk-pct').textContent = d.disk.pct || '--';
+    document.getElementById('disk-detail').textContent = `已用 ${d.disk.used} / 总 ${d.disk.total}`;
+    document.getElementById('disk-fill').style.width = diskPct + '%';
+    document.getElementById('disk-fill').style.background = diskPct > 85 ? '#f87171' : diskPct > 70 ? '#fbbf24' : '#34d399';
+
+    // 内存
+    const memTotal = d.mem.totalMB || 1;
+    const memUsed  = d.mem.usedMB  || 0;
+    const memPct   = Math.round(memUsed / memTotal * 100);
+    document.getElementById('mem-pct').textContent = memPct + '%';
+    document.getElementById('mem-detail').textContent = `已用 ${fmtMB(memUsed)} / 总 ${fmtMB(memTotal)}`;
+    document.getElementById('mem-fill').style.width = memPct + '%';
+    document.getElementById('mem-fill').style.background = memPct > 85 ? '#f87171' : memPct > 70 ? '#fbbf24' : '#60a5fa';
+
+    // 负载
+    document.getElementById('load-val').textContent = `${d.load.m1} / ${d.load.m5} / ${d.load.m15}`;
+
+    // 在线时长
+    document.getElementById('uptime-val').textContent = d.uptime || '--';
+
+    document.getElementById('stats-ts').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN');
+  } catch (e) {
+    document.getElementById('stats-ts').textContent = '请求失败';
+  }
+}
+
+function fmtMB(mb) {
+  if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+  return mb + ' MB';
+}
+
+/* ─── 终端 ─── */
+function clearTerm() {
+  const t = document.getElementById('terminal');
+  t.innerHTML = '<span class="line-info">~ 输入命令后按回车执行，或点击上方快捷按钮</span>';
+}
+
+function termAppend(html) {
+  const t = document.getElementById('terminal');
+  // remove placeholder on first real content
+  const ph = t.querySelector('.line-info');
+  if (ph && ph.textContent.startsWith('~ ')) ph.remove();
+  t.insertAdjacentHTML('beforeend', html);
+  t.scrollTop = t.scrollHeight;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function runCmd(cmd) {
+  if (!_mgrVpsId) return;
+  if (_activeEs) { _activeEs.close(); _activeEs = null; }
+  termAppend(`<div class="line-cmd">$ ${escHtml(cmd)}</div>`);
+
+  const es = new EventSource(`/vps/${_mgrVpsId}/exec-stream?cmd=${encodeURIComponent(cmd)}`);
+  _activeEs = es;
+
+  es.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    if (d.out) {
+      termAppend(`<span class="line-out">${escHtml(d.out)}</span>`);
+    } else if (d.err) {
+      termAppend(`<div class="line-err">[错误] ${escHtml(d.err)}</div>`);
+    } else if (d.done) {
+      termAppend(`<div class="line-info">─── 完成 ───</div>`);
+      es.close(); _activeEs = null;
+    }
+  };
+  es.onerror = () => {
+    termAppend(`<div class="line-err">[连接断开]</div>`);
+    es.close(); _activeEs = null;
+  };
+}
+
+function runCmdFromInput() {
+  const input = document.getElementById('cmd-input');
+  const cmd = input.value.trim();
+  if (!cmd) return;
+  input.value = '';
+  runCmd(cmd);
+}
+
+/* ─── Xray / SOCKS5 ─── */
+function toggleSocks5Panel() {
+  const p = document.getElementById('socks5-panel');
+  p.classList.toggle('hidden');
+}
+
+async function applySocks5() {
+  if (!_mgrVpsId) return;
+  const port = document.getElementById('s5-port').value;
+  const user = document.getElementById('s5-user').value.trim();
+  const pass = document.getElementById('s5-pass').value.trim();
+  const statusEl = document.getElementById('s5-status');
+
+  statusEl.textContent = '配置中...';
+  statusEl.style.color = 'var(--text-3)';
+
+  try {
+    const r = await fetch(`/vps/${_mgrVpsId}/socks5-config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port, user, pass }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      statusEl.textContent = `✓ 配置成功，SOCKS5 端口 ${port}`;
+      statusEl.style.color = '#34d399';
+      if (d.output) termAppend(`<div class="line-info">─── SOCKS5 配置 ───</div><span class="line-out">${escHtml(d.output)}</span>\n`);
+    } else {
+      statusEl.textContent = '✗ ' + (d.msg || '配置失败');
+      statusEl.style.color = '#f87171';
+      if (d.output) termAppend(`<div class="line-info">─── SOCKS5 配置 ───</div><div class="line-err">${escHtml(d.output)}</div>`);
+    }
+  } catch (e) {
+    statusEl.textContent = '请求失败：' + e.message;
+    statusEl.style.color = '#f87171';
+  }
+}
+
+/* ─── 其他 ─── */
 function toggleAuth(v) {
   document.getElementById('auth-password').classList.toggle('hidden', v === 'key');
   document.getElementById('auth-key').classList.toggle('hidden', v !== 'key');
 }
+
 async function testVps(id, btn) {
   const orig = btn.textContent;
   btn.textContent = '连接中...'; btn.disabled = true;
@@ -187,6 +453,7 @@ async function testVps(id, btn) {
   } catch(e) { showToast('请求失败', 'error'); }
   btn.textContent = orig; btn.disabled = false;
 }
+
 async function pingAll(btn) {
   const orig = btn.textContent;
   btn.textContent = '检测中...'; btn.disabled = true;
@@ -211,7 +478,7 @@ async function installDeps(id, btn) {
   const outputEl = document.getElementById('deps-output');
 
   statusEl.textContent = '正在连接并执行安装脚本，请稍候（可能需要 1-2 分钟）……';
-  statusEl.className = 'px-4 py-3 rounded-lg text-sm bg-blue-900/50 border border-blue-700 text-blue-300';
+  statusEl.className = 'alert alert-info';
   outputWrap.classList.add('hidden');
   document.getElementById('deps-modal').classList.remove('hidden');
 
@@ -220,10 +487,10 @@ async function installDeps(id, btn) {
     const d = await r.json();
     if (d.ok) {
       statusEl.textContent = '✓ ' + d.msg;
-      statusEl.className = 'px-4 py-3 rounded-lg text-sm bg-emerald-900/50 border border-emerald-700 text-emerald-300';
+      statusEl.className = 'alert alert-success';
     } else {
       statusEl.textContent = '✗ ' + d.msg;
-      statusEl.className = 'px-4 py-3 rounded-lg text-sm bg-red-900/50 border border-red-700 text-red-300';
+      statusEl.className = 'alert alert-error';
     }
     if (d.output) {
       outputEl.textContent = d.output;
@@ -231,7 +498,7 @@ async function installDeps(id, btn) {
     }
   } catch(e) {
     statusEl.textContent = '请求失败：' + e.message;
-    statusEl.className = 'px-4 py-3 rounded-lg text-sm bg-red-900/50 border border-red-700 text-red-300';
+    statusEl.className = 'alert alert-error';
   }
 
   btn.textContent = orig; btn.disabled = false;

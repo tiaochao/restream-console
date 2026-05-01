@@ -9,6 +9,11 @@ if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 const db = new DatabaseSync(path.join(dataDir, 'db.sqlite'));
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS global_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  );
+
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
@@ -193,8 +198,18 @@ function getSetting(key, userId = defaultUserId) {
   return db.prepare('SELECT value FROM settings WHERE user_id = ? AND key = ?').get(userId, key)?.value;
 }
 
+function getGlobalSetting(key) {
+  return db.prepare('SELECT value FROM global_settings WHERE key = ?').get(key)?.value;
+}
+
+function setGlobalSetting(key, value) {
+  db.prepare('INSERT OR REPLACE INTO global_settings (key, value) VALUES (?, ?)').run(key, value);
+}
+
 module.exports = db;
 module.exports.getSetting = getSetting;
+module.exports.getGlobalSetting = getGlobalSetting;
+module.exports.setGlobalSetting = setGlobalSetting;
 module.exports.ensureDefaultSettings = ensureDefaultSettings;
 module.exports.hashPassword = hashPassword;
 module.exports.verifyPassword = verifyPassword;

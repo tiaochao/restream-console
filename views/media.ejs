@@ -6,193 +6,187 @@ function formatBytes(bytes) {
   return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
 }
 %>
-<div class="space-y-6">
-  <!-- 顶部标题行 -->
-  <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+  <div>
+    <h2 class="page-title">媒体库</h2>
+    <p class="page-subtitle">文件直接归属目标 VPS，可复用、可删除、可查看存储压力。</p>
+  </div>
+  <!-- VPS 选择器 + 扫描按钮 -->
+  <div style="display:flex;align-items:flex-end;gap:12px;flex-shrink:0;">
     <div>
-      <h2 class="text-2xl font-bold">🎬 媒体库</h2>
-      <p class="text-gray-400 text-sm mt-1">文件直接归属目标 VPS，可复用、可删除、可查看存储压力。</p>
+      <label class="form-label" style="margin-bottom:6px;">选择 VPS</label>
+      <select id="vps-selector" onchange="switchVps(this.value)" class="form-select" style="min-width:160px;">
+        <% vpsList.forEach(function(v) { %>
+          <option value="<%= v.id %>" <%= v.id === selectedVpsId ? 'selected' : '' %>><%= v.name %></option>
+        <% }); %>
+      </select>
     </div>
-    <!-- VPS 选择器 + 扫描按钮 -->
-    <div class="flex items-center gap-3 flex-shrink-0">
-      <div>
-        <label class="block text-xs text-gray-400 mb-1">选择 VPS</label>
-        <select id="vps-selector" onchange="switchVps(this.value)"
-          class="px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 min-w-[160px]">
-          <% vpsList.forEach(function(v) { %>
-            <option value="<%= v.id %>" <%= v.id === selectedVpsId ? 'selected' : '' %>><%= v.name %></option>
-          <% }); %>
-        </select>
-      </div>
-      <% if (vps) { %>
-        <button onclick="scanVps()" id="scan-btn"
-          class="mt-5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors">
-          扫描导入 VPS 文件
-        </button>
-      <% } %>
-    </div>
+    <% if (vps) { %>
+      <button onclick="scanVps()" id="scan-btn" class="btn btn-primary">
+        扫描导入 VPS 文件
+      </button>
+    <% } %>
   </div>
-
-  <% if (!vps) { %>
-    <div class="bg-gray-800 rounded-xl p-8 text-center text-gray-500">
-      请先添加 VPS，然后选择一台查看媒体库
-    </div>
-  <% } else { %>
-
-  <!-- 上传区域 -->
-  <div class="bg-gray-800 rounded-xl shadow-lg overflow-hidden">
-    <div class="p-4 border-b border-gray-700 flex items-center justify-between">
-      <h3 class="text-lg font-semibold">上传文件到 VPS</h3>
-      <span class="text-xs text-gray-500">支持 mp4 / mkv / avi / ts / mov / flv / wmv / m4v / webm，单文件最大 20 GB</span>
-    </div>
-    <div class="p-4">
-      <!-- 拖拽区 -->
-      <div id="drop-zone"
-        class="border-2 border-dashed border-gray-600 hover:border-emerald-500 rounded-xl p-8 text-center cursor-pointer transition-colors"
-        onclick="document.getElementById('file-input').click()"
-        ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
-        <div id="drop-idle">
-          <p class="text-4xl mb-2">☁️</p>
-          <p class="text-gray-300 font-medium">点击选择文件，或将文件拖拽到此处</p>
-          <p class="text-gray-500 text-sm mt-1">文件将通过 SFTP 直接传输到 VPS，大文件耐心等待</p>
-        </div>
-        <div id="drop-file" class="hidden">
-          <p class="text-3xl mb-2">🎬</p>
-          <p id="drop-filename" class="text-white font-medium"></p>
-          <p id="drop-filesize" class="text-gray-400 text-sm mt-1"></p>
-        </div>
-      </div>
-      <input type="file" id="file-input" class="hidden"
-        accept=".mp4,.mkv,.avi,.ts,.mov,.flv,.wmv,.m4v,.webm"
-        onchange="onFileSelect(this.files[0])">
-
-      <!-- 进度条 -->
-      <div id="upload-progress-wrap" class="hidden mt-4 space-y-2">
-        <div class="flex items-center justify-between text-sm">
-          <span id="upload-status-text" class="text-gray-300">准备上传…</span>
-          <span id="upload-pct" class="font-mono text-gray-400">0%</span>
-        </div>
-        <div class="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-          <div id="upload-bar" class="h-2 bg-emerald-500 rounded-full transition-all duration-200" style="width:0%"></div>
-        </div>
-        <p id="upload-speed" class="text-xs text-gray-500"></p>
-      </div>
-
-      <!-- 上传按钮 -->
-      <div class="flex items-center gap-3 mt-4">
-        <button id="upload-btn" onclick="startUpload()" disabled
-          class="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors">
-          开始上传
-        </button>
-        <button id="upload-cancel-btn" class="hidden px-4 py-2 text-gray-400 hover:text-white text-sm transition-colors"
-          onclick="cancelUpload()">取消</button>
-        <span id="upload-result" class="text-sm"></span>
-      </div>
-    </div>
-  </div>
-
-  <!-- SFTP 提示 -->
-  <div class="bg-blue-900/30 border border-blue-700 rounded-lg px-4 py-3 text-sm text-blue-300">
-    大文件（数 GB）也可直接用 Termius / SFTP 上传到目标 VPS 的
-    <code class="bg-blue-900/50 px-1 rounded font-mono"><%= UPLOAD_DIR %>/</code>
-    ，然后点「扫描导入 VPS 文件」纳入媒体库。
-  </div>
-
-  <!-- 统计卡 -->
-  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-    <div class="bg-gray-800 rounded-xl p-4">
-      <p class="text-xs text-gray-400 mb-1">当前 VPS</p>
-      <p class="text-lg font-bold"><%= vps.name %></p>
-      <p class="text-xs text-gray-500 mt-1"><%= vps.host %></p>
-    </div>
-    <div class="bg-gray-800 rounded-xl p-4">
-      <p class="text-xs text-gray-400 mb-1">媒体文件数</p>
-      <p class="text-2xl font-bold text-white"><%= files.length %></p>
-      <p class="text-xs text-gray-500 mt-1">可直接复用</p>
-    </div>
-    <div class="bg-gray-800 rounded-xl p-4">
-      <p class="text-xs text-gray-400 mb-1">媒体库占用</p>
-      <p class="text-2xl font-bold text-amber-400"><%= formatBytes(totalSize) %></p>
-      <p class="text-xs text-gray-500 mt-1">仅统计已登记媒体库文件</p>
-    </div>
-    <div class="bg-gray-800 rounded-xl p-4">
-      <p class="text-xs text-gray-400 mb-1">VPS 根盘占用</p>
-      <p class="text-2xl font-bold" id="disk-pct">--</p>
-      <p class="text-xs text-gray-500 mt-1" id="disk-avail">加载中…</p>
-    </div>
-  </div>
-
-  <!-- 存储压力提示 -->
-  <div id="storage-status" class="bg-gray-800 rounded-lg px-4 py-3 text-sm text-gray-400">
-    正在获取磁盘信息…
-  </div>
-
-  <!-- 文件列表 -->
-  <div class="bg-gray-800 rounded-xl shadow-lg overflow-hidden">
-    <div class="p-4 border-b border-gray-700 flex items-center justify-between">
-      <h3 class="text-lg font-semibold">文件列表</h3>
-      <span class="text-xs text-gray-500">上传目录：<%= UPLOAD_DIR %></span>
-    </div>
-    <div class="overflow-x-auto">
-      <table class="w-full">
-        <thead class="bg-gray-700">
-          <tr>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">文件名</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">大小</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">状态</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">引用</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">远程路径</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">操作</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-700">
-          <% if (files.length === 0) { %>
-            <tr>
-              <td colspan="6" class="px-4 py-10 text-center text-gray-500">
-                当前 VPS 还没有媒体文件。用 SFTP 上传到 <code class="font-mono text-gray-400"><%= UPLOAD_DIR %></code>，然后点「扫描导入 VPS 文件」。
-              </td>
-            </tr>
-          <% } %>
-          <% files.forEach(function(f) { %>
-            <tr class="hover:bg-gray-750">
-              <td class="px-4 py-3 text-sm font-medium max-w-xs">
-                <span class="block truncate" title="<%= f.name %>"><%= f.name %></span>
-              </td>
-              <td class="px-4 py-3 text-sm text-gray-300 font-mono whitespace-nowrap">
-                <%= formatBytes(f.size) %>
-              </td>
-              <td class="px-4 py-3">
-                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-emerald-900/50 text-emerald-400 border border-emerald-800">
-                  已登记
-                </span>
-              </td>
-              <td class="px-4 py-3 text-sm text-gray-300">
-                <% if (f.ref_count > 0) { %>
-                  <span class="text-amber-400"><%= f.ref_count %> 个任务</span>
-                <% } else { %>
-                  <span class="text-gray-600">--</span>
-                <% } %>
-              </td>
-              <td class="px-4 py-3 text-xs font-mono text-gray-400 max-w-xs">
-                <span class="block truncate" title="<%= f.remote_path %>"><%= f.remote_path %></span>
-              </td>
-              <td class="px-4 py-3">
-                <form method="POST" action="/media/<%= f.id %>/delete" onsubmit="return confirm('确认删除「<%= f.name %>」？此操作将同时删除 VPS 上的文件。')">
-                  <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-                  <button type="submit" class="text-red-400 hover:text-red-300 text-sm px-2 py-1 rounded border border-red-900 hover:border-red-700 transition-colors">
-                    删除
-                  </button>
-                </form>
-              </td>
-            </tr>
-          <% }); %>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <% } %>
 </div>
+
+<% if (!vps) { %>
+  <div class="card section" style="padding:48px;text-align:center;color:var(--text-3);">
+    请先添加 VPS，然后选择一台查看媒体库
+  </div>
+<% } else { %>
+
+<!-- 上传区域 -->
+<div class="card section">
+  <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
+    <span class="card-title">上传文件到 VPS</span>
+    <span style="font-size:12px;color:var(--text-3);">支持 mp4 / mkv / avi / ts / mov / flv / wmv / m4v / webm，单文件最大 20 GB</span>
+  </div>
+  <div style="padding:20px;display:flex;flex-direction:column;gap:16px;">
+    <!-- 拖拽区 -->
+    <div id="drop-zone"
+      style="border:2px dashed rgba(255,255,255,0.15);border-radius:12px;padding:32px;text-align:center;cursor:pointer;transition:border-color 0.2s,background 0.2s;"
+      onclick="document.getElementById('file-input').click()"
+      ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+      <div id="drop-idle">
+        <p style="font-size:36px;margin-bottom:8px;">&#9729;&#65039;</p>
+        <p style="color:var(--text-1);font-weight:500;">点击选择文件，或将文件拖拽到此处</p>
+        <p style="color:var(--text-3);font-size:13px;margin-top:4px;">文件将通过 SFTP 直接传输到 VPS，大文件耐心等待</p>
+      </div>
+      <div id="drop-file" class="hidden">
+        <p style="font-size:32px;margin-bottom:8px;">&#127909;</p>
+        <p id="drop-filename" style="color:var(--text-1);font-weight:500;"></p>
+        <p id="drop-filesize" style="color:var(--text-2);font-size:13px;margin-top:4px;"></p>
+      </div>
+    </div>
+    <input type="file" id="file-input" class="hidden"
+      accept=".mp4,.mkv,.avi,.ts,.mov,.flv,.wmv,.m4v,.webm"
+      onchange="onFileSelect(this.files[0])">
+
+    <!-- 进度条 -->
+    <div id="upload-progress-wrap" class="hidden" style="display:none;flex-direction:column;gap:8px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;font-size:13px;">
+        <span id="upload-status-text" style="color:var(--text-2);">准备上传…</span>
+        <span id="upload-pct" class="monospace" style="color:var(--text-3);">0%</span>
+      </div>
+      <div style="width:100%;height:6px;background:rgba(255,255,255,0.08);border-radius:99px;overflow:hidden;">
+        <div id="upload-bar" style="height:6px;background:#818cf8;border-radius:99px;transition:width 0.2s;width:0%;"></div>
+      </div>
+      <p id="upload-speed" style="font-size:12px;color:var(--text-3);"></p>
+    </div>
+
+    <!-- 上传按钮 -->
+    <div style="display:flex;align-items:center;gap:12px;">
+      <button id="upload-btn" onclick="startUpload()" disabled class="btn btn-primary"
+        style="opacity:0.4;cursor:not-allowed;" id="upload-btn">
+        开始上传
+      </button>
+      <button id="upload-cancel-btn" class="hidden btn btn-secondary" onclick="cancelUpload()">取消</button>
+      <span id="upload-result" style="font-size:13px;"></span>
+    </div>
+  </div>
+</div>
+
+<!-- SFTP 提示 -->
+<div class="alert alert-info section">
+  大文件（数 GB）也可直接用 Termius / SFTP 上传到目标 VPS 的
+  <code class="monospace" style="background:rgba(129,140,248,0.1);padding:2px 6px;border-radius:4px;font-size:12px;"><%= UPLOAD_DIR %>/</code>
+  ，然后点「扫描导入 VPS 文件」纳入媒体库。
+</div>
+
+<!-- 统计卡 -->
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;" class="section">
+  <div class="card" style="padding:16px;">
+    <p style="font-size:12px;color:var(--text-3);margin-bottom:4px;">当前 VPS</p>
+    <p style="font-size:16px;font-weight:700;color:var(--text-1);"><%= vps.name %></p>
+    <p style="font-size:12px;color:var(--text-3);margin-top:4px;"><%= vps.host %></p>
+  </div>
+  <div class="card" style="padding:16px;">
+    <p style="font-size:12px;color:var(--text-3);margin-bottom:4px;">媒体文件数</p>
+    <p style="font-size:24px;font-weight:700;color:var(--text-1);"><%= files.length %></p>
+    <p style="font-size:12px;color:var(--text-3);margin-top:4px;">可直接复用</p>
+  </div>
+  <div class="card" style="padding:16px;">
+    <p style="font-size:12px;color:var(--text-3);margin-bottom:4px;">媒体库占用</p>
+    <p style="font-size:24px;font-weight:700;color:#f59e0b;"><%= formatBytes(totalSize) %></p>
+    <p style="font-size:12px;color:var(--text-3);margin-top:4px;">仅统计已登记媒体库文件</p>
+  </div>
+  <div class="card" style="padding:16px;">
+    <p style="font-size:12px;color:var(--text-3);margin-bottom:4px;">VPS 根盘占用</p>
+    <p style="font-size:24px;font-weight:700;" id="disk-pct">--</p>
+    <p style="font-size:12px;color:var(--text-3);margin-top:4px;" id="disk-avail">加载中…</p>
+  </div>
+</div>
+
+<!-- 存储压力提示 -->
+<div id="storage-status" class="alert alert-info section">
+  正在获取磁盘信息…
+</div>
+
+<!-- 文件列表 -->
+<div class="card section">
+  <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
+    <span class="card-title">文件列表</span>
+    <span style="font-size:12px;color:var(--text-3);">上传目录：<span class="monospace"><%= UPLOAD_DIR %></span></span>
+  </div>
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>文件名</th>
+          <th>大小</th>
+          <th>状态</th>
+          <th>引用</th>
+          <th>远程路径</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (files.length === 0) { %>
+          <tr>
+            <td colspan="6" style="text-align:center;padding:40px;color:var(--text-3);">
+              当前 VPS 还没有媒体文件。用 SFTP 上传到
+              <code class="monospace" style="font-size:12px;"><%= UPLOAD_DIR %></code>
+              ，然后点「扫描导入 VPS 文件」。
+            </td>
+          </tr>
+        <% } %>
+        <% files.forEach(function(f) { %>
+          <tr>
+            <td style="max-width:220px;">
+              <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;color:var(--text-1);"
+                title="<%= f.name %>"><%= f.name %></span>
+            </td>
+            <td class="monospace" style="font-size:13px;color:var(--text-2);white-space:nowrap;">
+              <%= formatBytes(f.size) %>
+            </td>
+            <td><span class="badge badge-green">已登记</span></td>
+            <td>
+              <% if (f.ref_count > 0) { %>
+                <span class="badge badge-yellow"><%= f.ref_count %> 个任务</span>
+              <% } else { %>
+                <span style="color:var(--text-3);">--</span>
+              <% } %>
+            </td>
+            <td style="max-width:200px;">
+              <span class="monospace" style="font-size:12px;color:var(--text-3);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                title="<%= f.remote_path %>"><%= f.remote_path %></span>
+            </td>
+            <td>
+              <form method="POST" action="/media/<%= f.id %>/delete" style="margin:0;"
+                onsubmit="return confirm('确认删除「<%= f.name %>」？此操作将同时删除 VPS 上的文件。')">
+                <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                <button type="submit" class="btn btn-danger btn-sm">删除</button>
+              </form>
+            </td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<% } %>
 
 <script>
 const _csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
@@ -218,8 +212,9 @@ async function loadDisk() {
     if (!d.ok) {
       document.getElementById('disk-pct').textContent = '--';
       document.getElementById('disk-avail').textContent = '获取失败';
-      document.getElementById('storage-status').className = 'bg-gray-800 rounded-lg px-4 py-3 text-sm text-gray-400';
-      document.getElementById('storage-status').textContent = '无法获取磁盘信息，请确认 VPS 连接正常';
+      const statusEl = document.getElementById('storage-status');
+      statusEl.className = 'alert alert-warn section';
+      statusEl.textContent = '无法获取磁盘信息，请确认 VPS 连接正常';
       return;
     }
     const pct = d.pct;
@@ -228,20 +223,20 @@ async function loadDisk() {
     document.getElementById('disk-avail').textContent = '剩余 ' + avail;
 
     const pctEl = document.getElementById('disk-pct');
-    if (pct >= 90) pctEl.className = 'text-2xl font-bold text-red-400';
-    else if (pct >= 80) pctEl.className = 'text-2xl font-bold text-amber-400';
-    else pctEl.className = 'text-2xl font-bold text-emerald-400';
+    if (pct >= 90) pctEl.style.color = '#f87171';
+    else if (pct >= 80) pctEl.style.color = '#f59e0b';
+    else pctEl.style.color = '#34d399';
 
     const statusEl = document.getElementById('storage-status');
     if (pct >= 90) {
-      statusEl.className = 'bg-red-900/30 border border-red-700 rounded-lg px-4 py-3 text-sm text-red-300';
-      statusEl.textContent = '⚠ 磁盘使用率超过 90%，存储压力较高，请及时清理不用的文件。';
+      statusEl.className = 'alert alert-error section';
+      statusEl.textContent = '磁盘使用率超过 90%，存储压力较高，请及时清理不用的文件。';
     } else if (pct >= 80) {
-      statusEl.className = 'bg-amber-900/30 border border-amber-700 rounded-lg px-4 py-3 text-sm text-amber-300';
-      statusEl.textContent = '⚠ 磁盘使用率超过 80%，建议清理不常用的媒体文件。';
+      statusEl.className = 'alert alert-warn section';
+      statusEl.textContent = '磁盘使用率超过 80%，建议清理不常用的媒体文件。';
     } else {
-      statusEl.className = 'bg-emerald-900/30 border border-emerald-700 rounded-lg px-4 py-3 text-sm text-emerald-300';
-      statusEl.textContent = '✓ 当前 VPS 存储压力正常。媒体文件直接留在目标 VPS，可复用，但也要定期清理不用的文件。';
+      statusEl.className = 'alert alert-success section';
+      statusEl.textContent = '当前 VPS 存储压力正常。媒体文件直接留在目标 VPS，可复用，但也要定期清理不用的文件。';
     }
   } catch (e) {
     document.getElementById('disk-pct').textContent = '--';
@@ -275,31 +270,38 @@ function onFileSelect(file) {
   document.getElementById('drop-file').classList.remove('hidden');
   document.getElementById('drop-filename').textContent = file.name;
   document.getElementById('drop-filesize').textContent = formatBytes(file.size);
-  document.getElementById('upload-btn').disabled = false;
+  const btn = document.getElementById('upload-btn');
+  btn.disabled = false;
+  btn.style.opacity = '1';
+  btn.style.cursor = 'pointer';
   document.getElementById('upload-result').textContent = '';
   resetProgress();
 }
 
 function onDragOver(e) {
   e.preventDefault();
-  document.getElementById('drop-zone').classList.add('border-emerald-500', 'bg-emerald-900/10');
+  const z = document.getElementById('drop-zone');
+  z.style.borderColor = '#818cf8';
+  z.style.background = 'rgba(129,140,248,0.05)';
 }
 function onDragLeave(e) {
-  document.getElementById('drop-zone').classList.remove('border-emerald-500', 'bg-emerald-900/10');
+  const z = document.getElementById('drop-zone');
+  z.style.borderColor = 'rgba(255,255,255,0.15)';
+  z.style.background = '';
 }
 function onDrop(e) {
   e.preventDefault();
   onDragLeave(e);
   const file = e.dataTransfer.files[0];
-  if (file) {
-    document.getElementById('file-input').files; // can't set directly
-    onFileSelect(file);
-  }
+  if (file) onFileSelect(file);
 }
 
 function resetProgress() {
-  document.getElementById('upload-progress-wrap').classList.add('hidden');
+  const wrap = document.getElementById('upload-progress-wrap');
+  wrap.classList.add('hidden');
+  wrap.style.display = 'none';
   document.getElementById('upload-bar').style.width = '0%';
+  document.getElementById('upload-bar').style.background = '#818cf8';
   document.getElementById('upload-pct').textContent = '0%';
   document.getElementById('upload-status-text').textContent = '准备上传…';
   document.getElementById('upload-speed').textContent = '';
@@ -312,9 +314,15 @@ function startUpload() {
   const formData = new FormData();
   formData.append('file', selectedFile);
 
-  document.getElementById('upload-btn').disabled = true;
+  const btn = document.getElementById('upload-btn');
+  btn.disabled = true;
+  btn.style.opacity = '0.4';
+  btn.style.cursor = 'not-allowed';
+
   document.getElementById('upload-cancel-btn').classList.remove('hidden');
-  document.getElementById('upload-progress-wrap').classList.remove('hidden');
+  const wrap = document.getElementById('upload-progress-wrap');
+  wrap.classList.remove('hidden');
+  wrap.style.display = 'flex';
   document.getElementById('upload-result').textContent = '';
 
   const xhr = new XMLHttpRequest();
@@ -339,18 +347,21 @@ function startUpload() {
       const d = JSON.parse(xhr.responseText);
       const resultEl = document.getElementById('upload-result');
       if (d.ok) {
-        resultEl.className = 'text-sm text-emerald-400';
-        resultEl.textContent = '✓ ' + d.msg;
+        resultEl.style.color = '#34d399';
+        resultEl.textContent = '已完成：' + d.msg;
         document.getElementById('upload-status-text').textContent = '传输完成';
-        document.getElementById('upload-bar').classList.add('bg-emerald-400');
+        document.getElementById('upload-bar').style.background = '#34d399';
         showToast(d.msg, 'success');
         setTimeout(() => location.reload(), 1200);
       } else {
-        resultEl.className = 'text-sm text-red-400';
-        resultEl.textContent = '✗ ' + d.msg;
+        resultEl.style.color = '#f87171';
+        resultEl.textContent = '失败：' + d.msg;
         document.getElementById('upload-status-text').textContent = '上传失败';
-        document.getElementById('upload-bar').classList.add('bg-red-500');
-        document.getElementById('upload-btn').disabled = false;
+        document.getElementById('upload-bar').style.background = '#f87171';
+        const b = document.getElementById('upload-btn');
+        b.disabled = false;
+        b.style.opacity = '1';
+        b.style.cursor = 'pointer';
       }
     } catch(e) {
       document.getElementById('upload-result').textContent = '响应解析失败';
@@ -360,9 +371,13 @@ function startUpload() {
   xhr.onerror = () => {
     activeXhr = null;
     document.getElementById('upload-cancel-btn').classList.add('hidden');
-    document.getElementById('upload-result').className = 'text-sm text-red-400';
-    document.getElementById('upload-result').textContent = '网络错误';
-    document.getElementById('upload-btn').disabled = false;
+    const resultEl = document.getElementById('upload-result');
+    resultEl.style.color = '#f87171';
+    resultEl.textContent = '网络错误';
+    const b = document.getElementById('upload-btn');
+    b.disabled = false;
+    b.style.opacity = '1';
+    b.style.cursor = 'pointer';
   };
 
   xhr.open('POST', `/media/${vpsId}/upload`);
@@ -372,7 +387,10 @@ function startUpload() {
 function cancelUpload() {
   if (activeXhr) { activeXhr.abort(); activeXhr = null; }
   document.getElementById('upload-cancel-btn').classList.add('hidden');
-  document.getElementById('upload-btn').disabled = false;
+  const b = document.getElementById('upload-btn');
+  b.disabled = false;
+  b.style.opacity = '1';
+  b.style.cursor = 'pointer';
   document.getElementById('upload-status-text').textContent = '已取消';
 }
 <% } %>

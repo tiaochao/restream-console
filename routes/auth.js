@@ -1,9 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { ensureDefaultSettings, hashPassword, verifyPassword } = require('../db');
+const { ensureDefaultSettings, hashPassword, verifyPassword, getGlobalSetting } = require('../db');
 
 function allowRegistration() {
+  const dbSetting = getGlobalSetting('allow_registration');
+  if (dbSetting !== null && dbSetting !== undefined) return dbSetting === 'true';
   const count = db.prepare('SELECT COUNT(*) as n FROM users').get().n;
   return process.env.ALLOW_REGISTRATION === 'true' || count === 0;
 }

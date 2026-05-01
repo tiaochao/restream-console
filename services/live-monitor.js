@@ -4,6 +4,8 @@ const sshService = require('./ssh');
 const taskManager = require('./task-manager');
 const platformApi = require('./platform-api');
 
+const DOUYIN_CHECK_SCRIPT = '/opt/restream-console/check_douyin.py';
+
 function dqEsc(s) {
   return String(s)
     .replace(/\\/g, '\\\\')
@@ -12,15 +14,23 @@ function dqEsc(s) {
     .replace(/"/g, '\\"');
 }
 
+function buildDouyinCheckCmd(url, userId) {
+  const cookies = getSetting('douyin_cookies', userId) || '';
+  // cookies 中可能有单引号，需转义
+  const ckEsc = cookies.replace(/'/g, "'\\''");
+  const urlEsc = url.replace(/'/g, "'\\''");
+  return `python3 ${DOUYIN_CHECK_SCRIPT} '${urlEsc}' '${ckEsc}'`;
+}
+
 function buildYtDlpCmd(url, userId) {
   const isDouyin = /douyin\.com/i.test(url);
   if (isDouyin) {
     const cookies = getSetting('douyin_cookies', userId) || '';
-    if (cookies) {
-      return `yt-dlp --no-warnings -g --add-header "Cookie:${dqEsc(cookies)}" "${dqEsc(url)}" 2>/dev/null | grep -m1 '^https\\?://'`;
-    }
+    const ckArg = cookies ? `--add-header "Cookie:${dqEsc(cookies)}"` : '';
+    const hdrs = `--add-header "Referer: https://live.douyin.com/" --add-header "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"`;
+    return `yt-dlp --socket-timeout 10 --no-warnings -g ${ckArg} ${hdrs} "${dqEsc(url)}" 2>/dev/null | grep -m1 '^https\\?://'`;
   }
-  return `yt-dlp --no-warnings -g "${dqEsc(url)}" 2>/dev/null | grep -m1 '^https\\?://'`;
+  return `yt-dlp --socket-timeout 10 --no-warnings -g "${dqEsc(url)}" 2>/dev/null | grep -m1 '^https\\?://'`;
 }
 
 function buildDouyinVpsCurlCmd(url, userId) {
@@ -38,19 +48,53 @@ function buildDouyinVpsCurlCmd(url, userId) {
 }
 
 async function checkLive(channel) {
+  const vps = db.prepare("SELECT * FROM vps WHERE user_id=? AND status='online' LIMIT 1").get(channel.user_id);
+
+  // 抖音：Python 脚本检测 + yt-dlp 实流验证（API 有 CDN 缓存，yt-dlp 最准确）
+  if (/douyin\.com/i.test(channel.url)) {
+    if (vps) {
+      try {
+        const cmd = buildDouyinCheckCmd(channel.url, channel.user_id);
+        const result = await sshService.exec(vps.id, cmd);
+        const out = (result.stdout || '').trim();
+        console.log(`[直播监控] ${channel.name} python check: ${out}`);
+
+        if (out === 'offline') return false;
+
+        if (out === 'live') {
+          // API 可能有 5-15 分钟 CDN 缓存，用 yt-dlp 实际拉流验证
+          try {
+            const ytCmd = buildYtDlpCmd(channel.url, channel.user_id);
+            const ytResult = await sshService.exec(vps.id, ytCmd);
+            const ytUrl = (ytResult.stdout || '').trim();
+            if (ytUrl.startsWith('http')) {
+              return true;   // 能拿到流地址 → 确实直播中
+            }
+            // yt-dlp 拿不到流地址 → API 缓存误报，已结束
+            console.log(`[直播监控] ${channel.name} API 缓存误报，yt-dlp 无流，判定 offline`);
+            return false;
+          } catch (_) {
+            return true;     // yt-dlp 异常（网络问题），保守信任 API
+          }
+        }
+        // unknown → 降级到本地 API
+      } catch (_) {}
+    }
+    // 无 VPS 或脚本返回 unknown → 本地 API 兜底
+    const apiResult = await platformApi.checkChannel(channel).catch(() => null);
+    return apiResult !== null ? apiResult.isLive : null;
+  }
+
+  // 非抖音：先 API，再 VPS yt-dlp
   const apiResult = await platformApi.checkChannel(channel).catch(() => null);
   if (apiResult !== null) return apiResult.isLive;
 
-  const vps = db.prepare("SELECT * FROM vps WHERE user_id=? AND status='online' LIMIT 1").get(channel.user_id);
   if (!vps) return null;
-
   try {
-    const isDouyinUrl = /live\.douyin\.com\/\d+/.test(channel.url);
-    const curlCmd = isDouyinUrl ? buildDouyinVpsCurlCmd(channel.url, channel.user_id) : null;
-    const cmd = curlCmd || buildYtDlpCmd(channel.url, channel.user_id);
+    const cmd = buildYtDlpCmd(channel.url, channel.user_id);
     const result = await sshService.exec(vps.id, cmd);
     const out = (result.stdout || '').trim();
-    return isDouyinUrl ? out === 'normal' : out.startsWith('http');
+    return out.startsWith('http');
   } catch (_) {
     return null;
   }

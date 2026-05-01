@@ -1,42 +1,51 @@
-<div class="space-y-6">
-  <h2 class="text-2xl font-bold">📋 日志</h2>
+<div class="page-header">
+  <h2 class="page-title">日志</h2>
+  <p class="page-subtitle">查看各任务的运行日志</p>
+</div>
 
-  <div class="bg-gray-800 rounded-xl shadow-lg overflow-hidden">
-    <div class="p-4 border-b border-gray-700">
-      <h3 class="text-lg font-semibold">有日志记录的任务</h3>
-    </div>
-    <div class="overflow-x-auto">
-      <table class="w-full">
-        <thead class="bg-gray-700">
+<div class="card section">
+  <div class="card-header">
+    <span class="card-title">有日志记录的任务</span>
+  </div>
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>任务</th>
+          <th>VPS</th>
+          <th>状态</th>
+          <th>日志文件</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (tasks.length === 0) { %>
           <tr>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">任务</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">VPS</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">状态</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">日志文件</th>
-            <th class="px-4 py-3 text-left text-sm font-medium text-gray-300">操作</th>
+            <td colspan="5" style="text-align:center;padding:32px;color:var(--text-3);">暂无日志记录</td>
           </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-700">
-          <% if (tasks.length === 0) { %>
-            <tr><td colspan="5" class="px-4 py-8 text-center text-gray-500">暂无日志记录</td></tr>
-          <% } %>
-          <% tasks.forEach(function(t) {
-            const statusMap = { running:'text-emerald-400', error:'text-red-400', stopped:'text-gray-400', idle:'text-gray-500' };
-          %>
-            <tr class="hover:bg-gray-750">
-              <td class="px-4 py-3 text-sm"><%= t.name || ('任务 #' + t.id) %></td>
-              <td class="px-4 py-3 text-sm text-gray-300"><%= t.vps_name || '--' %></td>
-              <td class="px-4 py-3 text-sm <%= statusMap[t.status] || 'text-gray-400' %>"><%= t.status %></td>
-              <td class="px-4 py-3 text-sm font-mono text-gray-400 text-xs"><%= t.log_file %></td>
-              <td class="px-4 py-3">
-                <a href="/logs/<%= t.id %>" class="text-blue-400 hover:text-blue-300 text-sm px-2 py-1 rounded border border-blue-900 hover:border-blue-700 transition-colors">
-                  查看日志
-                </a>
-              </td>
-            </tr>
-          <% }); %>
-        </tbody>
-      </table>
-    </div>
+        <% } %>
+        <% tasks.forEach(function(t) {
+          const badgeMap = {
+            running: 'badge-green',
+            error:   'badge-red',
+            stopped: 'badge-gray',
+            idle:    'badge-gray'
+          };
+          const badge = badgeMap[t.status] || 'badge-gray';
+        %>
+          <tr>
+            <td style="font-weight:500;color:var(--text-1);"><%= t.name || ('任务 #' + t.id) %></td>
+            <td style="color:var(--text-2);"><%= t.vps_name || '--' %></td>
+            <td><span class="badge <%= badge %>"><%= t.status %></span></td>
+            <td class="monospace" style="font-size:12px;color:var(--text-3);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              <%= t.log_file %>
+            </td>
+            <td>
+              <a href="/logs/<%= t.id %>" class="btn btn-secondary btn-sm">查看日志</a>
+            </td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
   </div>
 </div>

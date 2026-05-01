@@ -6,18 +6,26 @@ const sshService = require('../services/ssh');
 const platformApi = require('../services/platform-api');
 const { checkAndUpdate } = require('../services/live-monitor');
 
+const DOUYIN_CHECK_SCRIPT = '/opt/restream-console/check_douyin.py';
+
 function dqEsc(s) {
   return String(s).replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$').replace(/"/g, '\\"');
+}
+
+function buildDouyinCheckCmd(url, userId) {
+  const cookies = getSetting('douyin_cookies', userId) || '';
+  const ckEsc  = cookies.replace(/'/g, "'\\''");
+  const urlEsc = url.replace(/'/g, "'\\''");
+  return `python3 ${DOUYIN_CHECK_SCRIPT} '${urlEsc}' '${ckEsc}'`;
 }
 
 function buildYtDlpCmd(url, userId) {
   const isDouyin = /douyin\.com/i.test(url);
   if (isDouyin) {
     const cookies = getSetting('douyin_cookies', userId) || '';
-    if (cookies) {
-      const escaped = cookies.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      return `yt-dlp --no-warnings -g --add-header "Cookie:${escaped}" "${dqEsc(url)}" 2>/dev/null | head -1`;
-    }
+    const ckArg = cookies ? `--add-header "Cookie:${cookies.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : '';
+    const hdrs = `--add-header "Referer: https://live.douyin.com/" --add-header "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"`;
+    return `yt-dlp --no-warnings -g ${ckArg} ${hdrs} "${dqEsc(url)}" 2>/dev/null | head -1`;
   }
   return `yt-dlp --no-warnings -g "${dqEsc(url)}" 2>/dev/null | head -1`;
 }
@@ -121,7 +129,52 @@ router.post('/:id/check', async (req, res) => {
   const channel = db.prepare('SELECT * FROM source_channels WHERE id=? AND user_id=?').get(req.params.id, req.session.userId);
   if (!channel) return res.json({ ok: false, msg: '频道不存在' });
 
-  // 优先平台直连 API
+  // 抖音：Python 脚本检测（三层降级，比 yt-dlp 可靠）
+  if (/douyin\.com/i.test(channel.url)) {
+    const vps = db.prepare("SELECT * FROM vps WHERE user_id=? AND status='online' LIMIT 1").get(req.session.userId);
+    if (vps) {
+      const cmd = buildDouyinCheckCmd(channel.url, req.session.userId);
+      try {
+        const result = await sshService.exec(vps.id, cmd);
+        const out = (result.stdout || '').trim();
+        console.log(`[频道检测] ${channel.name} python check: ${out}`);
+
+        if (out === 'offline') {
+          db.prepare("UPDATE source_channels SET live_status='offline', last_check=datetime('now') WHERE id=? AND user_id=?")
+            .run(channel.id, req.session.userId);
+          return res.json({ ok: true, live: false, status: 'offline', msg: '未开播', source: 'python' });
+        }
+
+        if (out === 'live') {
+          // yt-dlp 实流验证（API 有 CDN 缓存）
+          try {
+            const ytCmd = buildYtDlpCmd(channel.url, req.session.userId);
+            const ytResult = await sshService.exec(vps.id, ytCmd);
+            const ytUrl = (ytResult.stdout || '').trim();
+            if (!ytUrl.startsWith('http')) {
+              // yt-dlp 拿不到流地址 → API 误报，已结束
+              db.prepare("UPDATE source_channels SET live_status='offline', last_check=datetime('now') WHERE id=? AND user_id=?")
+                .run(channel.id, req.session.userId);
+              return res.json({ ok: true, live: false, status: 'offline', msg: '未开播（API缓存误报，已结束）', source: 'yt-dlp-verify' });
+            }
+          } catch (_) {
+            // yt-dlp 异常，维持 live 判定
+          }
+          db.prepare("UPDATE source_channels SET live_status='live', last_check=datetime('now') WHERE id=? AND user_id=?")
+            .run(channel.id, req.session.userId);
+          if (channel.auto_start) {
+            checkAndUpdate({ ...channel, live_status: channel.live_status }).catch(() => {});
+          }
+          return res.json({ ok: true, live: true, status: 'live', msg: '正在直播 🔴', source: 'python+yt-dlp' });
+        }
+        // unknown → 继续走 API
+      } catch (e) {
+        console.warn('[频道检测] Python 脚本失败:', e.message);
+      }
+    }
+  }
+
+  // 非抖音 or Python 返回 unknown：本地 API
   try {
     const apiResult = await platformApi.checkChannel(channel);
     if (apiResult !== null) {
@@ -136,40 +189,34 @@ router.post('/:id/check', async (req, res) => {
 
       const source = apiResult.source || '';
       const anchorName = apiResult.anchorName ? `（${apiResult.anchorName}）` : '';
-      const detail = source ? `[${source}]` : '';
       return res.json({
         ok: true,
         live: isLive,
         status,
-        msg: isLive ? `正在直播 🔴${anchorName}` : `未开播${anchorName} ${detail}`,
+        msg: isLive ? `正在直播 🔴${anchorName}` : `未开播${anchorName}`,
         source,
       });
     }
   } catch (e) {
-    // 平台 API 异常，继续尝试 VPS
     console.warn('[频道检测] 平台 API 失败:', e.message);
   }
 
-  // 兜底：SSH 检测（抖音用 curl 解析页面，其他用 yt-dlp）
+  // 兜底：SSH yt-dlp
   const vps = db.prepare("SELECT * FROM vps WHERE user_id=? AND status='online' LIMIT 1").get(req.session.userId);
   if (!vps) return res.json({ ok: false, msg: '没有在线的 VPS，且平台 API 检测失败' });
 
-  const isDouyinUrl = /live\.douyin\.com\/\d+/.test(channel.url);
-  const curlCmd = isDouyinUrl ? buildDouyinVpsCurlCmd(channel.url, req.session.userId) : null;
-  const cmd = curlCmd || buildYtDlpCmd(channel.url, req.session.userId);
-  const source = curlCmd ? 'vps-curl' : 'yt-dlp';
-
+  const cmd = buildYtDlpCmd(channel.url, req.session.userId);
   try {
     const result = await sshService.exec(vps.id, cmd);
     const out = (result.stdout || '').trim();
-    console.log(`[频道检测] ${channel.name} VPS raw output: "${out}" stderr: "${(result.stderr||'').slice(0,100)}"`);
-    const isLive = isDouyinUrl ? out === 'normal' : out.startsWith('http');
-
+    const isLive = out.startsWith('http');
+    const status = isLive ? 'live' : 'offline';
+    db.prepare("UPDATE source_channels SET live_status=?, last_check=datetime('now') WHERE id=? AND user_id=?")
+      .run(status, channel.id, req.session.userId);
     if (isLive && channel.auto_start) {
       checkAndUpdate({ ...channel, live_status: channel.live_status }).catch(() => {});
     }
-
-    res.json({ ok: true, live: isLive, status, msg: isLive ? '正在直播 🔴' : `未开播 [${source}]`, source });
+    res.json({ ok: true, live: isLive, status, msg: isLive ? '正在直播 🔴' : '未开播 [yt-dlp]', source: 'yt-dlp' });
   } catch (e) {
     res.json({ ok: false, msg: 'SSH 执行失败: ' + e.message });
   }
@@ -212,21 +259,31 @@ router.post('/check-all', async (req, res) => {
       }
     } catch (_) {}
 
-    // 2. VPS curl/yt-dlp 兜底
+    // 2. VPS Python 脚本（抖音）或 yt-dlp（其他平台）兜底
     try {
       const vps = db.prepare("SELECT * FROM vps WHERE user_id=? AND status='online' LIMIT 1").get(req.session.userId);
       if (vps) {
-        const isDouyinUrl = /live\.douyin\.com\/\d+/.test(ch.url);
-        const curlCmd = isDouyinUrl ? buildDouyinVpsCurlCmd(ch.url, req.session.userId) : null;
-        const cmd = curlCmd || buildYtDlpCmd(ch.url, req.session.userId);
-        const r = await sshService.exec(vps.id, cmd);
-        const out = (r.stdout || '').trim();
-        isLive = isDouyinUrl ? out === 'normal' : out.startsWith('http');
-        status = isLive ? 'live' : 'offline';
-        db.prepare("UPDATE source_channels SET live_status=?, last_check=datetime('now') WHERE id=? AND user_id=?")
-          .run(status, ch.id, req.session.userId);
-        if (isLive && !wasLive && ch.auto_start) {
-          checkAndUpdate(ch).catch(() => {});
+        const isDouyinUrl = /douyin\.com/i.test(ch.url);
+        let detected = false;
+        if (isDouyinUrl) {
+          const r = await sshService.exec(vps.id, buildDouyinCheckCmd(ch.url, req.session.userId));
+          const out = (r.stdout || '').trim();
+          if (out === 'live' || out === 'offline') {
+            isLive = out === 'live';
+            detected = true;
+          }
+        } else {
+          const r = await sshService.exec(vps.id, buildYtDlpCmd(ch.url, req.session.userId));
+          const out = (r.stdout || '').trim();
+          if (out) { isLive = out.startsWith('http'); detected = true; }
+        }
+        if (detected) {
+          status = isLive ? 'live' : 'offline';
+          db.prepare("UPDATE source_channels SET live_status=?, last_check=datetime('now') WHERE id=? AND user_id=?")
+            .run(status, ch.id, req.session.userId);
+          if (isLive && !wasLive && ch.auto_start) {
+            checkAndUpdate(ch).catch(() => {});
+          }
         }
       }
     } catch (_) {}
@@ -235,6 +292,39 @@ router.post('/check-all', async (req, res) => {
   }
 
   res.json({ ok: true, results });
+});
+
+// 编辑频道
+router.post('/:id/edit', (req, res) => {
+  const { name, platform, url, notes, auto_vps_id, auto_stream_key_id, auto_start } = req.body;
+
+  if (auto_vps_id) {
+    const vps = db.prepare('SELECT id FROM vps WHERE id=? AND user_id=?').get(auto_vps_id, req.session.userId);
+    if (!vps) return res.json({ ok: false, msg: 'VPS 不存在或无权限' });
+  }
+  if (auto_stream_key_id) {
+    const sk = db.prepare('SELECT id FROM stream_keys WHERE id=? AND user_id=?').get(auto_stream_key_id, req.session.userId);
+    if (!sk) return res.json({ ok: false, msg: '推流码不存在或无权限' });
+  }
+
+  try {
+    const result = db.prepare(`
+      UPDATE source_channels
+      SET name=?, platform=?, url=?, notes=?, auto_vps_id=?, auto_stream_key_id=?, auto_start=?
+      WHERE id=? AND user_id=?
+    `).run(
+      name, platform || 'douyin', url,
+      notes || null,
+      auto_vps_id || null,
+      auto_stream_key_id || null,
+      auto_start === '1' ? 1 : 0,
+      req.params.id, req.session.userId
+    );
+    if (result.changes === 0) return res.json({ ok: false, msg: '频道不存在' });
+    res.json({ ok: true });
+  } catch (e) {
+    res.json({ ok: false, msg: e.message });
+  }
 });
 
 module.exports = router;

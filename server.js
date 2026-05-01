@@ -4,7 +4,7 @@ const ejsLayouts = require('express-ejs-layouts');
 const path = require('path');
 
 require('./db'); // 初始化数据库
-const { requireAuth } = require('./middleware/auth');
+const { requireAuth, requireAdmin } = require('./middleware/auth');
 const { csrfMiddleware } = require('./middleware/csrf');
 const taskManager = require('./services/task-manager');
 const liveMonitor = require('./services/live-monitor');
@@ -47,6 +47,7 @@ app.use('/stream-keys', requireAuth, require('./routes/stream-keys'));
 app.use('/media', requireAuth, require('./routes/media'));
 app.use('/logs', requireAuth, require('./routes/logs'));
 app.use('/settings', requireAuth, require('./routes/settings'));
+app.use('/admin', requireAuth, requireAdmin, require('./routes/admin'));
 
 app.get('/', (req, res) => res.redirect('/dashboard'));
 

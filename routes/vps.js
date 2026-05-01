@@ -77,6 +77,127 @@ router.post('/:id/install-deps', async (req, res) => {
   }
 });
 
+// 获取 VPS 系统状态：磁盘、内存、负载、在线时长
+router.get('/:id/stats', async (req, res) => {
+  const vps = db.prepare('SELECT * FROM vps WHERE id=? AND user_id=?').get(req.params.id, req.session.userId);
+  if (!vps) return res.json({ ok: false, msg: 'VPS 不存在' });
+
+  const cmd = [
+    `df -h / | awk 'NR==2{printf "%s|%s|%s|%s",$2,$3,$4,$5}'`,
+    `echo ""`,
+    `free -m | awk '/^Mem/{printf "%s|%s|%s",$2,$3,$4}'`,
+    `echo ""`,
+    `uptime -p 2>/dev/null || uptime | sed 's/.*up \\([^,]*\\).*/\\1/'`,
+    `cat /proc/loadavg | awk '{printf "%s|%s|%s",$1,$2,$3}'`,
+    `echo ""`,
+  ].join('; ');
+
+  try {
+    const result = await sshService.exec(vps.id, cmd);
+    const lines = result.stdout.split('\n').map(l => l.trim()).filter(Boolean);
+
+    const disk = lines[0] ? lines[0].split('|') : [];
+    const mem  = lines[1] ? lines[1].split('|') : [];
+    const uptime = lines[2] || '--';
+    const load  = lines[3] ? lines[3].split('|') : [];
+
+    res.json({
+      ok: true,
+      disk: { total: disk[0] || '--', used: disk[1] || '--', avail: disk[2] || '--', pct: disk[3] || '--' },
+      mem:  { totalMB: parseInt(mem[0]) || 0, usedMB: parseInt(mem[1]) || 0, freeMB: parseInt(mem[2]) || 0 },
+      uptime,
+      load: { m1: load[0] || '--', m5: load[1] || '--', m15: load[2] || '--' },
+    });
+  } catch (e) {
+    res.json({ ok: false, msg: e.message });
+  }
+});
+
+// 在 VPS 上执行命令（SSE 流式输出）
+router.get('/:id/exec-stream', async (req, res) => {
+  const vps = db.prepare('SELECT * FROM vps WHERE id=? AND user_id=?').get(req.params.id, req.session.userId);
+  if (!vps) { res.status(404).end(); return; }
+
+  const cmd = String(req.query.cmd || '').slice(0, 500).trim();
+  if (!cmd) { res.status(400).end(); return; }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch (_) {} };
+  let activeStream = null;
+
+  req.on('close', () => {
+    if (activeStream) { try { activeStream.destroy(); } catch (_) {} }
+  });
+
+  try {
+    const ssh = await sshService.connect(vps.id);
+    await new Promise((resolve) => {
+      ssh.connection.exec(cmd, (err, stream) => {
+        if (err) { send({ err: err.message }); resolve(); return; }
+        activeStream = stream;
+        stream.on('data', chunk => send({ out: chunk.toString() }));
+        stream.stderr.on('data', chunk => send({ out: chunk.toString() }));
+        stream.on('close', () => { send({ done: true }); resolve(); });
+        stream.on('error', e => { send({ err: e.message }); resolve(); });
+      });
+    });
+  } catch (e) {
+    send({ err: e.message });
+  }
+
+  res.end();
+});
+
+// 配置 Xray SOCKS5 代理
+router.post('/:id/socks5-config', async (req, res) => {
+  const vps = db.prepare('SELECT * FROM vps WHERE id=? AND user_id=?').get(req.params.id, req.session.userId);
+  if (!vps) return res.json({ ok: false, msg: 'VPS 不存在' });
+
+  const port = parseInt(req.body.port) || 1080;
+  const user = String(req.body.user || '').trim().slice(0, 64);
+  const pass = String(req.body.pass || '').trim().slice(0, 64);
+
+  if (port < 1 || port > 65535) return res.json({ ok: false, msg: '端口号无效 (1-65535)' });
+
+  const config = {
+    log: { loglevel: 'warning' },
+    inbounds: [{
+      port,
+      listen: '0.0.0.0',
+      protocol: 'socks',
+      settings: {
+        auth: user ? 'password' : 'noauth',
+        accounts: user ? [{ user, pass }] : [],
+        udp: true,
+      },
+    }],
+    outbounds: [{ protocol: 'freedom', tag: 'direct' }],
+  };
+
+  const cfgB64 = Buffer.from(JSON.stringify(config, null, 2)).toString('base64');
+  const cmd = [
+    'mkdir -p /usr/local/etc/xray',
+    `echo '${cfgB64}' | base64 -d > /usr/local/etc/xray/config.json`,
+    'xray -test -config /usr/local/etc/xray/config.json 2>&1 | head -5',
+    'systemctl restart xray 2>&1',
+    'sleep 1',
+    'systemctl is-active xray && echo "✓ Xray SOCKS5 已启动，端口: ' + port + '"',
+  ].join(' && ');
+
+  try {
+    const result = await sshService.exec(vps.id, cmd);
+    const output = (result.stdout + '\n' + result.stderr).trim();
+    const ok = output.includes('✓ Xray SOCKS5 已启动');
+    res.json({ ok, output });
+  } catch (e) {
+    res.json({ ok: false, msg: e.message });
+  }
+});
+
 // 批量 ping 所有 VPS（前端按钮调用）
 router.post('/ping-all', async (req, res) => {
   const vpsList = db.prepare('SELECT * FROM vps WHERE user_id=?').all(req.session.userId);

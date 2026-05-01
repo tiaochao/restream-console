@@ -139,6 +139,7 @@ function formatDuration(ms) {
                   </a>
                   <form method="POST" action="/tasks/<%= t.id %>/delete"
                     onsubmit="return confirm('确认删除任务？')" style="display:inline">
+                    <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                     <button type="submit"
                       class="text-red-400 hover:text-red-300 text-xs px-2 py-1 rounded border border-red-900 hover:border-red-700 transition-colors">
                       删除
@@ -163,6 +164,7 @@ function formatDuration(ms) {
         class="text-gray-400 hover:text-white text-xl">✕</button>
     </div>
     <form method="POST" action="/tasks" class="p-6 space-y-4">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="grid grid-cols-2 gap-4">
         <div>
           <label class="block text-sm font-medium text-gray-300 mb-1">任务名称</label>
@@ -372,6 +374,7 @@ function formatDuration(ms) {
 
 <script>
 const TASKS_DATA = <%- JSON.stringify(tasks).replace(/<\/script>/gi, '<\\/script>') %>;
+const _csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
 
 const RTMP_MAP = {
   youtube: 'rtmp://a.rtmp.youtube.com/live2',

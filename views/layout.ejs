@@ -4,8 +4,25 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title><%= typeof title !== 'undefined' ? title : '转推控制台' %></title>
+  <meta name="csrf-token" content="<%= csrfToken %>">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+  <script>
+    (function() {
+      const _fetch = window.fetch;
+      window.fetch = function(url, opts = {}) {
+        const tok = document.querySelector('meta[name="csrf-token"]')?.content;
+        if (tok && opts.method && !['GET','HEAD','OPTIONS'].includes(opts.method.toUpperCase())) {
+          opts.headers = Object.assign({}, opts.headers, { 'x-csrf-token': tok });
+        }
+        return _fetch(url, opts);
+      };
+      document.addEventListener('htmx:configRequest', function(e) {
+        const tok = document.querySelector('meta[name="csrf-token"]')?.content;
+        if (tok) e.detail.headers['x-csrf-token'] = tok;
+      });
+    })();
+  </script>
   <style>
     .htmx-indicator { display: none; }
     .htmx-request .htmx-indicator { display: inline-block; }
@@ -53,9 +70,12 @@
         <% }); %>
       </div>
       <div class="mt-auto pt-4 border-t border-gray-700">
-        <a href="/logout" class="flex items-center px-4 py-3 rounded-lg text-gray-300 hover:bg-gray-700 hover:text-white transition-colors">
-          <span class="mr-3">🚪</span><span>退出</span>
-        </a>
+        <form method="POST" action="/logout" style="margin:0">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+          <button type="submit" class="w-full flex items-center px-4 py-3 rounded-lg text-gray-300 hover:bg-gray-700 hover:text-white transition-colors">
+            <span class="mr-3">🚪</span><span>退出</span>
+          </button>
+        </form>
       </div>
     </nav>
 
@@ -71,12 +91,17 @@
           ['/media','🎬','媒体库'],
           ['/logs','📋','日志'],
           ['/settings','⚙️','设置'],
-          ['/logout','🚪','退出'],
         ].forEach(function(item) { %>
           <a href="<%= item[0] %>" class="flex items-center px-4 py-3 rounded-lg text-gray-300 hover:bg-gray-700">
             <span class="mr-2"><%= item[1] %></span><%= item[2] %>
           </a>
         <% }); %>
+        <form method="POST" action="/logout" style="margin:0">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+          <button type="submit" class="w-full flex items-center px-4 py-3 rounded-lg text-gray-300 hover:bg-gray-700">
+            <span class="mr-2">🚪</span>退出
+          </button>
+        </form>
       </div>
     </div>
 

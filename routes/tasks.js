@@ -32,6 +32,13 @@ router.get('/', (req, res) => {
 
 router.post('/', (req, res) => {
   const { name, vps_id, platform, source_url, backup_urls, rtmp_url, stream_key, auto_restart, notes } = req.body;
+
+  // 验证 vps_id 归属
+  if (vps_id) {
+    const vps = db.prepare('SELECT id FROM vps WHERE id=? AND user_id=?').get(vps_id, req.session.userId);
+    if (!vps) return res.status(403).render('tasks', { title:'任务管理 - 转推控制台', currentPath:'/tasks', tasks: [], error: 'VPS 不存在或无权限', ...getFormData(req.session.userId), PLATFORM_RTMP: taskManager.PLATFORM_RTMP });
+  }
+
   let cleanUrl = source_url;
   try {
     const u = new URL(source_url);
@@ -126,6 +133,12 @@ router.post('/:id/toggle-restart', (req, res) => {
 
 router.post('/:id/edit', (req, res) => {
   const { name, vps_id, source_url, backup_urls, rtmp_url, stream_key, auto_restart, notes } = req.body;
+
+  if (vps_id) {
+    const vps = db.prepare('SELECT id FROM vps WHERE id=? AND user_id=?').get(vps_id, req.session.userId);
+    if (!vps) return res.json({ ok: false, msg: 'VPS 不存在或无权限' });
+  }
+
   let cleanUrl = source_url || '';
   try {
     const u = new URL(cleanUrl);

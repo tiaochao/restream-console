@@ -10,6 +10,10 @@ const sshService = require('../services/ssh');
 
 const UPLOAD_DIR = '/root/restream_uploads';
 
+function dqEsc(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$').replace(/"/g, '\\"');
+}
+
 const storage = multer.diskStorage({
   destination: os.tmpdir(),
   filename: (req, file, cb) => {
@@ -57,7 +61,7 @@ router.post('/:vpsId/scan', async (req, res) => {
 
   const cmd = [
     `mkdir -p ${UPLOAD_DIR}`,
-    `find ${UPLOAD_DIR} -maxdepth 1 -type f \\( -name "*.mp4" -o -name "*.mkv" -o -name "*.avi" -o -name "*.ts" -o -name "*.mov" -o -name "*.flv" -o -name "*.wmv" \\) | while IFS= read -r f; do echo "$(basename \\"$f\\")|\$f|$(stat -c%s "\$f" 2>/dev/null||echo 0)"; done`,
+    `find ${UPLOAD_DIR} -maxdepth 1 -type f \\( -name "*.mp4" -o -name "*.mkv" -o -name "*.avi" -o -name "*.ts" -o -name "*.mov" -o -name "*.flv" -o -name "*.wmv" \\) | while IFS= read -r f; do printf '%s\\t%s\\t%s\\n' "$(basename "$f")" "$f" "$(stat -c%s "$f" 2>/dev/null||echo 0)"; done`,
   ].join(' && ');
 
   try {
@@ -67,7 +71,7 @@ router.post('/:vpsId/scan', async (req, res) => {
     let updated = 0;
 
     for (const line of lines) {
-      const parts = line.split('|');
+      const parts = line.split('\t');
       if (parts.length < 3) continue;
       const [name, remotePath, sizeStr] = parts;
       if (!name || !remotePath) continue;
@@ -121,8 +125,12 @@ router.post('/:id/delete', async (req, res) => {
     return res.redirect('/media?toast=' + encodeURIComponent('文件不存在') + '&type=error');
   }
 
+  if (!file.remote_path || !file.remote_path.startsWith(UPLOAD_DIR + '/')) {
+    return res.redirect('/media?toast=' + encodeURIComponent('文件路径无效') + '&type=error');
+  }
+
   try {
-    await sshService.exec(file.vps_id, `rm -f "${file.remote_path}"`);
+    await sshService.exec(file.vps_id, `rm -f "${dqEsc(file.remote_path)}"`);
   } catch (_) {}
 
   db.prepare('DELETE FROM media_files WHERE id=?').run(file.id);
@@ -162,7 +170,7 @@ router.post('/:vpsId/upload', (req, res, next) => {
   let origName;
   try { origName = Buffer.from(req.file.originalname, 'latin1').toString('utf8'); }
   catch (_) { origName = req.file.originalname; }
-  const safeName = origName.replace(/[/\\:*?"<>|]/g, '_');
+  const safeName = origName.replace(/[/\\:*?"<>|$`;\n\r\x00(){}]/g, '_');
   const remotePath = `${UPLOAD_DIR}/${safeName}`;
 
   // 计算本地 MD5（与上传同时进行，不额外耗时）

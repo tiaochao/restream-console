@@ -252,7 +252,7 @@ async function checkBilibili(url) {
       { headers: { 'Accept': 'application/json', 'Referer': 'https://live.bilibili.com/' } }
     );
     const json = JSON.parse(res.text);
-    if (json.code !== 0) return { isLive: false, error: `B站API: ${json.message}`, source: 'bilibili-api' };
+    if (json.code !== 0) return null;
     const data = json.data || {};
     return {
       isLive: data.live_status === 1,
@@ -261,7 +261,7 @@ async function checkBilibili(url) {
       source: 'bilibili-api',
     };
   } catch (e) {
-    return { isLive: false, error: `B站检测失败: ${e.message}`, source: 'bilibili-fail' };
+    return null;
   }
 }
 
@@ -320,7 +320,7 @@ async function checkYouTube(url) {
     const res = await doFetch(url, {
       headers: { 'Accept': 'text/html,*/*', 'Accept-Language': 'en-US,en;q=0.5' },
     });
-    const isLive = res.text.includes('"isLive":true') || res.text.includes('"isLiveBroadcast"');
+    const isLive = res.text.includes('"isLive":true');
     return { isLive, source: 'youtube-html' };
   } catch (e) {
     return { isLive: false, error: `YouTube 检测失败: ${e.message}` };

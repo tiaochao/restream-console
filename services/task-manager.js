@@ -23,22 +23,30 @@ function cookiesToNetscape(cookieStr) {
   return lines.join('\n');
 }
 
+// Escape a string for use inside a double-quoted shell argument.
+// Prevents injection via $, backticks, \, or " in user-controlled values.
+function dqEsc(s) {
+  return String(s)
+    .replace(/\\/g, '\\\\')
+    .replace(/`/g, '\\`')
+    .replace(/\$/g, '\\$')
+    .replace(/"/g, '\\"');
+}
+
 function buildCommand(task) {
-  const dest = `${task.rtmp_url}/${task.stream_key}`;
+  const dest = `${dqEsc(task.rtmp_url)}/${dqEsc(task.stream_key)}`;
   const logFile = `/tmp/restream_${task.id}.log`;
   const ffmpegEncode = `-c:v libx264 -preset veryfast -b:v 6000k -maxrate 6500k -bufsize 12000k -c:a aac -b:a 192k -max_interleave_delta 0`;
 
   let inner;
   if (task.source_url.startsWith('/')) {
     // 媒体库文件：循环推送
-    inner = `ffmpeg -stream_loop -1 -re -i "${task.source_url}" -c:v copy -c:a copy -f flv "${dest}"`;
+    inner = `ffmpeg -stream_loop -1 -re -i "${dqEsc(task.source_url)}" -c:v copy -c:a copy -f flv "${dest}"`;
 
   } else if (task._resolvedStreamUrl) {
     // 平台 API 已解析出直链（抖音等），直接给 FFmpeg
-    // HLS 源：用 -re 保持直播时序；FLV 源：不加 -re，让 FFmpeg 按实际速率读
     const isHls = task._resolvedStreamUrl.includes('.m3u8');
     const reFlag = isHls ? '-re' : '';
-    // 抖音 CDN 需要 Referer 和 UA，否则返回 403 拒绝访问
     const isDouyin = /douyincdn\.com|douyin\.com/i.test(task._resolvedStreamUrl);
     const hdrs = isDouyin
       ? `-headers "Referer: https://live.douyin.com/\\r\\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\\r\\n"`
@@ -46,50 +54,48 @@ function buildCommand(task) {
     const ffmpegCmd = [
       `ffmpeg`, reFlag, hdrs,
       `-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10`,
-      `-i "${task._resolvedStreamUrl}"`,
+      `-i "${dqEsc(task._resolvedStreamUrl)}"`,
       ffmpegEncode,
       `-f flv "${dest}"`,
     ].filter(Boolean).join(' ');
     inner = [
-      `echo "[直链-${isHls ? 'HLS' : 'FLV'}] ${task._resolvedStreamUrl.substring(0, 80)}..."`,
+      `echo "[直链-${isHls ? 'HLS' : 'FLV'}] ${dqEsc(task._resolvedStreamUrl).substring(0, 80)}..."`,
       ffmpegCmd,
     ].join('; ');
 
   } else if (task._douyinCookieFile) {
-    // 抖音直播：streamlink 获取直链，再由 FFmpeg 直连（避免 pipe:0 空管道错误）
-    // 用 Python 解析 cookie 文件并传 --http-cookie 参数（streamlink 无 --http-cookie-file 选项）
-    const srcUrl = task.source_url;
+    // 抖音直播：streamlink 获取直链，再由 FFmpeg 直连
+    const srcUrl = dqEsc(task.source_url);
     const ckFile = task._douyinCookieFile;
-    const logFile = `/tmp/sl_${task.id}.log`;
+    const slLogFile = `/tmp/sl_${task.id}.log`;
     const douyinHdrs = `-headers "Referer: https://live.douyin.com/\\r\\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\\r\\n"`;
-    const pyCmd = `python3 -c "import subprocess,sys; ck=open('${ckFile}').read(); args=['streamlink','--stream-url']+sum([['--http-cookie',c.strip()] for c in ck.split(';') if c.strip() and '=' in c.strip()],[])+['${srcUrl}','best']; r=subprocess.run(args,capture_output=True,text=True); open('${logFile}','w').write(r.stderr); print(r.stdout.strip(),end='')"`;
+    const pyCmd = `python3 -c "import subprocess,sys; ck=open('${ckFile}').read(); args=['streamlink','--stream-url']+sum([['--http-cookie',c.strip()] for c in ck.split(';') if c.strip() and '=' in c.strip()],[])+['${srcUrl}','best']; r=subprocess.run(args,capture_output=True,text=True); open('${slLogFile}','w').write(r.stderr); print(r.stdout.strip(),end='')"`;
     inner = [
       `echo "[streamlink] 获取抖音直链: ${srcUrl}"`,
       `SL_URL=$(${pyCmd})`,
-      `if [ -z "$SL_URL" ]; then echo "[错误] streamlink 获取直链失败，原因如下:"; cat ${logFile}; exit 1; fi`,
+      `if [ -z "$SL_URL" ]; then echo "[错误] streamlink 获取直链失败，原因如下:"; cat ${slLogFile}; exit 1; fi`,
       `echo "[streamlink] 直链: $SL_URL"`,
       `ffmpeg -re -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 ${douyinHdrs} -i "$SL_URL" ${ffmpegEncode} -f flv "${dest}"`,
     ].join('; ');
 
   } else {
-    // 通用：yt-dlp 提取直链（YouTube / B站 / 快手 / 其他平台）
-    // -reconnect 保证 HLS 直播流断流后自动重连
+    // 通用：yt-dlp 提取直链
     const allUrls = [task.source_url];
     if (task.backup_urls) {
       task.backup_urls.split('\n').forEach(u => { u = u.trim(); if (u) allUrls.push(u); });
     }
     if (allUrls.length === 1) {
       inner = [
-        `STREAM_URL=$(yt-dlp --no-warnings -f "best" -g "${task.source_url}" | head -1)`,
+        `STREAM_URL=$(yt-dlp --no-warnings -f "best" -g "${dqEsc(task.source_url)}" | grep -m1 '^https\\?://')`,
         `echo "[yt-dlp] 直链: $STREAM_URL"`,
         `if [ -z "$STREAM_URL" ]; then echo "[错误] yt-dlp 提取失败"; exit 1; fi`,
         `ffmpeg -re -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -i "$STREAM_URL" ${ffmpegEncode} -f flv "${dest}"`,
       ].join('; ');
     } else {
-      const urlsArr = allUrls.map(u => `"${u.replace(/"/g, '\\"')}"`).join(' ');
+      const urlsArr = allUrls.map(u => `"${dqEsc(u)}"`).join(' ');
       inner = [
         `STREAM_URL=""`,
-        `for _SRC in ${urlsArr}; do STREAM_URL=$(yt-dlp --no-warnings -f "best" -g "$_SRC" 2>/dev/null | head -1); if [ -n "$STREAM_URL" ]; then echo "[yt-dlp] 使用源: $_SRC"; break; fi; done`,
+        `for _SRC in ${urlsArr}; do STREAM_URL=$(yt-dlp --no-warnings -f "best" -g "$_SRC" 2>/dev/null | grep -m1 '^https\\?://'); if [ -n "$STREAM_URL" ]; then echo "[yt-dlp] 使用源: $_SRC"; break; fi; done`,
         `if [ -z "$STREAM_URL" ]; then echo "[错误] 所有源均提取失败"; exit 1; fi`,
         `echo "[yt-dlp] 直链: $STREAM_URL"`,
         `ffmpeg -re -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -i "$STREAM_URL" ${ffmpegEncode} -f flv "${dest}"`,
@@ -97,7 +103,8 @@ function buildCommand(task) {
     }
   }
 
-  return { cmd: `nohup bash -c '${inner}' > ${logFile} 2>&1 & echo $!`, logFile };
+  const scriptB64 = Buffer.from(inner).toString('base64');
+  return { cmd: `nohup bash -c "$(echo '${scriptB64}' | base64 -d)" > ${logFile} 2>&1 & echo $!`, logFile };
 }
 
 async function startTask(taskId, userId = null) {
@@ -161,9 +168,10 @@ async function startTask(taskId, userId = null) {
       if (!task._resolvedStreamUrl) {
         if (!cookies) throw new Error('抖音任务需要配置 Cookie（设置页面）');
         const ckFile = `/tmp/dy_ck_${taskId}.txt`;
-        // 写原始 cookie 字符串（key1=val1; key2=val2），供 buildCommand 用 Python 解析
+        // Write cookie via base64 to avoid heredoc delimiter injection
+        const cookiesB64 = Buffer.from(cookies).toString('base64');
         await sshService.exec(task.vps_id,
-          `python3 -c "import sys; open('${ckFile}','w').write(sys.stdin.read())" <<'__EOFC__'\n${cookies}\n__EOFC__`
+          `echo ${cookiesB64} | base64 -d > ${ckFile}`
         );
         task._douyinCookieFile = ckFile;
         console.log(`[任务${taskId}] API 无直链，将用 streamlink + cookies: ${ckFile}`);

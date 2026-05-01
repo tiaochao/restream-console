@@ -6,16 +6,20 @@ const sshService = require('../services/ssh');
 const platformApi = require('../services/platform-api');
 const { checkAndUpdate } = require('../services/live-monitor');
 
+function dqEsc(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$').replace(/"/g, '\\"');
+}
+
 function buildYtDlpCmd(url, userId) {
   const isDouyin = /douyin\.com/i.test(url);
   if (isDouyin) {
     const cookies = getSetting('douyin_cookies', userId) || '';
     if (cookies) {
       const escaped = cookies.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      return `yt-dlp --no-warnings -g --add-header "Cookie:${escaped}" "${url}" 2>/dev/null | head -1`;
+      return `yt-dlp --no-warnings -g --add-header "Cookie:${escaped}" "${dqEsc(url)}" 2>/dev/null | head -1`;
     }
   }
-  return `yt-dlp --no-warnings -g "${url}" 2>/dev/null | head -1`;
+  return `yt-dlp --no-warnings -g "${dqEsc(url)}" 2>/dev/null | head -1`;
 }
 
 // 抖音直播间用 VPS curl 检测（本机 IP 被验证码拦截，VPS IP 可正常访问）
@@ -69,6 +73,22 @@ router.get('/', (req, res) => {
 
 router.post('/', (req, res) => {
   const { name, platform, url, auto_start, auto_vps_id, auto_stream_key_id, notes } = req.body;
+
+  if (auto_vps_id) {
+    const vps = db.prepare('SELECT id FROM vps WHERE id=? AND user_id=?').get(auto_vps_id, req.session.userId);
+    if (!vps) {
+      const channels = db.prepare('SELECT * FROM source_channels WHERE user_id=? ORDER BY created_at DESC').all(req.session.userId);
+      return res.status(403).render('channels', { title: '频道监控 - 转推控制台', currentPath: '/channels', channels, error: 'VPS 不存在或无权限', ...getFormData(req.session.userId) });
+    }
+  }
+  if (auto_stream_key_id) {
+    const sk = db.prepare('SELECT id FROM stream_keys WHERE id=? AND user_id=?').get(auto_stream_key_id, req.session.userId);
+    if (!sk) {
+      const channels = db.prepare('SELECT * FROM source_channels WHERE user_id=? ORDER BY created_at DESC').all(req.session.userId);
+      return res.status(403).render('channels', { title: '频道监控 - 转推控制台', currentPath: '/channels', channels, error: '推流码不存在或无权限', ...getFormData(req.session.userId) });
+    }
+  }
+
   try {
     db.prepare(`
       INSERT INTO source_channels (user_id, name, platform, url, auto_start, auto_vps_id, auto_stream_key_id, notes)
@@ -143,10 +163,7 @@ router.post('/:id/check', async (req, res) => {
     const result = await sshService.exec(vps.id, cmd);
     const out = (result.stdout || '').trim();
     console.log(`[频道检测] ${channel.name} VPS raw output: "${out}" stderr: "${(result.stderr||'').slice(0,100)}"`);
-    const isLive = isDouyinUrl ? out === 'normal' : out.length > 0;
-    const status = isLive ? 'live' : 'offline';
-    db.prepare("UPDATE source_channels SET live_status=?, last_check=datetime('now') WHERE id=? AND user_id=?")
-      .run(status, channel.id, req.session.userId);
+    const isLive = isDouyinUrl ? out === 'normal' : out.startsWith('http');
 
     if (isLive && channel.auto_start) {
       checkAndUpdate({ ...channel, live_status: channel.live_status }).catch(() => {});
@@ -204,7 +221,7 @@ router.post('/check-all', async (req, res) => {
         const cmd = curlCmd || buildYtDlpCmd(ch.url, req.session.userId);
         const r = await sshService.exec(vps.id, cmd);
         const out = (r.stdout || '').trim();
-        isLive = isDouyinUrl ? out === 'normal' : out.length > 0;
+        isLive = isDouyinUrl ? out === 'normal' : out.startsWith('http');
         status = isLive ? 'live' : 'offline';
         db.prepare("UPDATE source_channels SET live_status=?, last_check=datetime('now') WHERE id=? AND user_id=?")
           .run(status, ch.id, req.session.userId);

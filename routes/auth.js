@@ -23,12 +23,16 @@ router.post('/login', (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
 
   if (user && verifyPassword(password, user.password_hash)) {
-    req.session.authenticated = true;
-    req.session.userId = user.id;
-    req.session.username = user.username;
-    req.session.role = user.role || 'user';
-    ensureDefaultSettings(user.id);
-    return res.redirect('/dashboard');
+    req.session.regenerate((err) => {
+      if (err) return res.status(500).render('login', { layout: 'layout-bare', error: '服务器错误', allowRegistration: allowRegistration() });
+      req.session.authenticated = true;
+      req.session.userId = user.id;
+      req.session.username = user.username;
+      req.session.role = user.role || 'user';
+      ensureDefaultSettings(user.id);
+      res.redirect('/dashboard');
+    });
+    return;
   }
 
   res.status(401).render('login', {
@@ -64,18 +68,21 @@ router.post('/register', (req, res) => {
     const info = db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)')
       .run(username, hashPassword(password), 'user');
     ensureDefaultSettings(info.lastInsertRowid);
-    req.session.authenticated = true;
-    req.session.userId = info.lastInsertRowid;
-    req.session.username = username;
-    req.session.role = 'user';
-    res.redirect('/dashboard');
+    req.session.regenerate((err) => {
+      if (err) return res.status(500).render('register', { layout: 'layout-bare', error: '服务器错误' });
+      req.session.authenticated = true;
+      req.session.userId = info.lastInsertRowid;
+      req.session.username = username;
+      req.session.role = 'user';
+      res.redirect('/dashboard');
+    });
   } catch (e) {
     const msg = /UNIQUE/i.test(e.message) ? '用户名已存在' : e.message;
     res.status(400).render('register', { layout: 'layout-bare', error: msg });
   }
 });
 
-router.get('/logout', (req, res) => {
+router.post('/logout', (req, res) => {
   req.session.destroy(() => res.redirect('/login'));
 });
 

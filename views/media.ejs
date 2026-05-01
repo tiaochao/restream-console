@@ -178,6 +178,7 @@ function formatBytes(bytes) {
               </td>
               <td class="px-4 py-3">
                 <form method="POST" action="/media/<%= f.id %>/delete" onsubmit="return confirm('确认删除「<%= f.name %>」？此操作将同时删除 VPS 上的文件。')">
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                   <button type="submit" class="text-red-400 hover:text-red-300 text-sm px-2 py-1 rounded border border-red-900 hover:border-red-700 transition-colors">
                     删除
                   </button>
@@ -194,6 +195,8 @@ function formatBytes(bytes) {
 </div>
 
 <script>
+const _csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
 function switchVps(id) {
   location.href = '/media?vps_id=' + id;
 }

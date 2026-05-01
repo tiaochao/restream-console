@@ -41,7 +41,7 @@
                 <span class="block truncate" title="<%= k.rtmp_url %>"><%= k.rtmp_url %></span>
               </td>
               <td class="px-4 py-3 text-sm font-mono text-gray-300">
-                <span class="cursor-pointer" onclick="toggleKey(this, '<%= k.stream_key %>')" title="点击显示/隐藏">
+                <span class="cursor-pointer" data-key="<%= k.stream_key %>" onclick="toggleKey(this)" title="点击显示/隐藏">
                   <span class="key-masked"><%= k.stream_key.substring(0, 4) %>****</span>
                 </span>
               </td>
@@ -53,6 +53,7 @@
                     校验
                   </button>
                   <form method="POST" action="/stream-keys/<%= k.id %>/delete" onsubmit="return confirm('确认删除推流码「<%= k.name %>」？')">
+                    <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                     <button type="submit" class="text-red-400 hover:text-red-300 text-sm px-2 py-1 rounded border border-red-900 hover:border-red-700 transition-colors">
                       删除
                     </button>
@@ -75,6 +76,7 @@
       <button onclick="document.getElementById('add-modal').classList.add('hidden')" class="text-gray-400 hover:text-white text-xl">✕</button>
     </div>
     <form method="POST" action="/stream-keys" class="p-6 space-y-4">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="grid grid-cols-2 gap-4">
         <div>
           <label class="block text-sm font-medium text-gray-300 mb-1">名称 *</label>
@@ -140,6 +142,8 @@
 </div>
 
 <script>
+const _csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
 const SK_RTMP_MAP = {
   youtube: 'rtmp://a.rtmp.youtube.com/live2',
   tiktok:  'rtmp://push.tiktokv.com/live',
@@ -149,7 +153,8 @@ function setSkRtmp(p) {
   if (p !== 'custom') document.getElementById('sk-rtmp-url').value = SK_RTMP_MAP[p] || '';
 }
 
-function toggleKey(el, fullKey) {
+function toggleKey(el) {
+  const fullKey = el.dataset.key;
   const span = el.querySelector('.key-masked');
   if (span.dataset.shown === '1') {
     span.textContent = fullKey.substring(0, 4) + '****';

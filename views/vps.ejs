@@ -72,6 +72,7 @@
                     安装依赖
                   </button>
                   <form method="POST" action="/vps/<%= v.id %>/delete" onsubmit="return confirm('确认删除 <%= v.name %>？')">
+                    <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                     <button type="submit" class="text-red-400 hover:text-red-300 text-sm px-2 py-1 rounded border border-red-900 hover:border-red-700 transition-colors">
                       删除
                     </button>
@@ -94,6 +95,7 @@
       <button onclick="document.getElementById('add-modal').classList.add('hidden')" class="text-gray-400 hover:text-white text-xl">✕</button>
     </div>
     <form method="POST" action="/vps" class="p-6 space-y-4">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="grid grid-cols-2 gap-4">
         <div>
           <label class="block text-sm font-medium text-gray-300 mb-1">名称 *</label>
@@ -168,6 +170,8 @@
 </div>
 
 <script>
+const _csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
 function toggleAuth(v) {
   document.getElementById('auth-password').classList.toggle('hidden', v === 'key');
   document.getElementById('auth-key').classList.toggle('hidden', v !== 'key');

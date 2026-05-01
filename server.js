@@ -5,6 +5,7 @@ const path = require('path');
 
 require('./db'); // 初始化数据库
 const { requireAuth } = require('./middleware/auth');
+const { csrfMiddleware } = require('./middleware/csrf');
 const taskManager = require('./services/task-manager');
 const liveMonitor = require('./services/live-monitor');
 
@@ -35,6 +36,7 @@ app.use(session({
 }));
 
 
+app.use(csrfMiddleware);
 app.use('/', require('./routes/auth'));
 app.get('/healthz', (req, res) => res.json({ ok: true, service: 'restream-console' }));
 app.use('/dashboard', requireAuth, require('./routes/dashboard'));

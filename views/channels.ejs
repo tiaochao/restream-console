@@ -95,11 +95,12 @@
                     class="text-blue-400 hover:text-blue-300 text-sm px-2 py-1 rounded border border-blue-800 hover:border-blue-600 transition-colors">
                     检测
                   </button>
-                  <button onclick="useUrl('<%= ch.url %>')"
+                  <button onclick="useUrl(this.dataset.url)" data-url="<%= ch.url %>"
                     class="text-emerald-400 hover:text-emerald-300 text-sm px-2 py-1 rounded border border-emerald-800 hover:border-emerald-600 transition-colors">
                     用此URL
                   </button>
-                  <form method="POST" action="/channels/<%= ch.id %>/delete" onsubmit="return confirm('确认删除「<%= ch.name %>」？')">
+                  <form method="POST" action="/channels/<%= ch.id %>/delete" data-name="<%= ch.name %>" onsubmit="return confirm('确认删除「' + this.dataset.name + '」？')">
+                    <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                     <button type="submit" class="text-red-400 hover:text-red-300 text-sm px-2 py-1 rounded border border-red-900 hover:border-red-700 transition-colors">
                       删除
                     </button>
@@ -122,6 +123,7 @@
       <button onclick="document.getElementById('add-modal').classList.add('hidden')" class="text-gray-400 hover:text-white text-xl">✕</button>
     </div>
     <form method="POST" action="/channels" class="p-6 space-y-4">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="grid grid-cols-2 gap-4">
         <div>
           <label class="block text-sm font-medium text-gray-300 mb-1">频道名称 *</label>
@@ -194,6 +196,8 @@
 </div>
 
 <script>
+const _csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
 function toggleAutoFields(show) {
   document.getElementById('auto-fields').classList.toggle('hidden', !show);
 }
@@ -262,7 +266,6 @@ async function toggleAuto(id, btn) {
 }
 
 function useUrl(url) {
-  // 复制到剪贴板，方便粘贴到任务创建表单
   navigator.clipboard.writeText(url).then(() => {
     showToast('直播间 URL 已复制，可粘贴到新建任务的来源 URL 处', 'success');
   }).catch(() => {

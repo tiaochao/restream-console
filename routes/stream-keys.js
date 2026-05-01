@@ -38,7 +38,10 @@ router.post('/:id/verify', async (req, res) => {
   const vps = db.prepare("SELECT * FROM vps WHERE user_id=? AND status='online' LIMIT 1").get(req.session.userId);
   if (!vps) return res.json({ ok: false, msg: '没有在线 VPS 可用于校验，请先测试 VPS 连接' });
 
-  const dest = `${key.rtmp_url}/${key.stream_key}`;
+  function dqEsc(s) {
+    return String(s).replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$').replace(/"/g, '\\"');
+  }
+  const dest = `${dqEsc(key.rtmp_url)}/${dqEsc(key.stream_key)}`;
   // 用 ffmpeg 生成 1 秒黑色测试信号推送到 RTMP，若能连上即为有效
   const cmd = `timeout 10 ffmpeg -re -f lavfi -i color=black:s=1280x720:r=30 -f lavfi -i anullsrc -c:v libx264 -preset ultrafast -b:v 500k -c:a aac -t 3 -f flv "${dest}" 2>&1 | tail -5`;
 

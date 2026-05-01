@@ -4,16 +4,23 @@ const sshService = require('./ssh');
 const taskManager = require('./task-manager');
 const platformApi = require('./platform-api');
 
+function dqEsc(s) {
+  return String(s)
+    .replace(/\\/g, '\\\\')
+    .replace(/`/g, '\\`')
+    .replace(/\$/g, '\\$')
+    .replace(/"/g, '\\"');
+}
+
 function buildYtDlpCmd(url, userId) {
   const isDouyin = /douyin\.com/i.test(url);
   if (isDouyin) {
     const cookies = getSetting('douyin_cookies', userId) || '';
     if (cookies) {
-      const escaped = cookies.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      return `yt-dlp --no-warnings -g --add-header "Cookie:${escaped}" "${url}" 2>/dev/null | head -1`;
+      return `yt-dlp --no-warnings -g --add-header "Cookie:${dqEsc(cookies)}" "${dqEsc(url)}" 2>/dev/null | grep -m1 '^https\\?://'`;
     }
   }
-  return `yt-dlp --no-warnings -g "${url}" 2>/dev/null | head -1`;
+  return `yt-dlp --no-warnings -g "${dqEsc(url)}" 2>/dev/null | grep -m1 '^https\\?://'`;
 }
 
 function buildDouyinVpsCurlCmd(url, userId) {
@@ -43,7 +50,7 @@ async function checkLive(channel) {
     const cmd = curlCmd || buildYtDlpCmd(channel.url, channel.user_id);
     const result = await sshService.exec(vps.id, cmd);
     const out = (result.stdout || '').trim();
-    return isDouyinUrl ? out === 'normal' : out.length > 0;
+    return isDouyinUrl ? out === 'normal' : out.startsWith('http');
   } catch (_) {
     return null;
   }
@@ -84,10 +91,17 @@ async function checkAndUpdate(channel) {
 function startLiveMonitor() {
   const intervalMin = parseInt(getSetting('monitor_interval') || '5');
   const interval = intervalMin * 60 * 1000;
+  let scanning = false;
   setInterval(async () => {
-    const channels = db.prepare('SELECT * FROM source_channels').all();
-    for (const ch of channels) {
-      await checkAndUpdate(ch).catch(e => console.error('[直播监控]', e.message));
+    if (scanning) return;
+    scanning = true;
+    try {
+      const channels = db.prepare('SELECT * FROM source_channels').all();
+      for (const ch of channels) {
+        await checkAndUpdate(ch).catch(e => console.error('[直播监控]', e.message));
+      }
+    } finally {
+      scanning = false;
     }
   }, interval);
   console.log(`[直播监控] 已启动，每 ${intervalMin} 分钟自动检测开播状态`);

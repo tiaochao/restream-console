@@ -129,7 +129,7 @@ router.post('/:id/check', async (req, res) => {
   const channel = db.prepare('SELECT * FROM source_channels WHERE id=? AND user_id=?').get(req.params.id, req.session.userId);
   if (!channel) return res.json({ ok: false, msg: '频道不存在' });
 
-  // 抖音：Python 脚本检测（三层降级，比 yt-dlp 可靠）
+  // 抖音：Python 脚本内置 API offline 检测 + yt-dlp + m3u8 manifest 验证
   if (/douyin\.com/i.test(channel.url)) {
     const vps = db.prepare("SELECT * FROM vps WHERE user_id=? AND status='online' LIMIT 1").get(req.session.userId);
     if (vps) {
@@ -142,30 +142,16 @@ router.post('/:id/check', async (req, res) => {
         if (out === 'offline') {
           db.prepare("UPDATE source_channels SET live_status='offline', last_check=datetime('now') WHERE id=? AND user_id=?")
             .run(channel.id, req.session.userId);
-          return res.json({ ok: true, live: false, status: 'offline', msg: '未开播', source: 'python' });
+          return res.json({ ok: true, live: false, status: 'offline', msg: '未开播' });
         }
 
         if (out === 'live') {
-          // yt-dlp 实流验证（API 有 CDN 缓存）
-          try {
-            const ytCmd = buildYtDlpCmd(channel.url, req.session.userId);
-            const ytResult = await sshService.exec(vps.id, ytCmd);
-            const ytUrl = (ytResult.stdout || '').trim();
-            if (!ytUrl.startsWith('http')) {
-              // yt-dlp 拿不到流地址 → API 误报，已结束
-              db.prepare("UPDATE source_channels SET live_status='offline', last_check=datetime('now') WHERE id=? AND user_id=?")
-                .run(channel.id, req.session.userId);
-              return res.json({ ok: true, live: false, status: 'offline', msg: '未开播（API缓存误报，已结束）', source: 'yt-dlp-verify' });
-            }
-          } catch (_) {
-            // yt-dlp 异常，维持 live 判定
-          }
           db.prepare("UPDATE source_channels SET live_status='live', last_check=datetime('now') WHERE id=? AND user_id=?")
             .run(channel.id, req.session.userId);
           if (channel.auto_start) {
             checkAndUpdate({ ...channel, live_status: channel.live_status }).catch(() => {});
           }
-          return res.json({ ok: true, live: true, status: 'live', msg: '正在直播 🔴', source: 'python+yt-dlp' });
+          return res.json({ ok: true, live: true, status: 'live', msg: '正在直播 🔴' });
         }
         // unknown → 继续走 API
       } catch (e) {

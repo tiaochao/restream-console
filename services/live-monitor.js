@@ -50,7 +50,7 @@ function buildDouyinVpsCurlCmd(url, userId) {
 async function checkLive(channel) {
   const vps = db.prepare("SELECT * FROM vps WHERE user_id=? AND status='online' LIMIT 1").get(channel.user_id);
 
-  // 抖音：Python 脚本检测 + yt-dlp 实流验证（API 有 CDN 缓存，yt-dlp 最准确）
+  // 抖音：Python 脚本内置 API offline 检测 + yt-dlp + m3u8 manifest 验证
   if (/douyin\.com/i.test(channel.url)) {
     if (vps) {
       try {
@@ -58,25 +58,8 @@ async function checkLive(channel) {
         const result = await sshService.exec(vps.id, cmd);
         const out = (result.stdout || '').trim();
         console.log(`[直播监控] ${channel.name} python check: ${out}`);
-
+        if (out === 'live')    return true;
         if (out === 'offline') return false;
-
-        if (out === 'live') {
-          // API 可能有 5-15 分钟 CDN 缓存，用 yt-dlp 实际拉流验证
-          try {
-            const ytCmd = buildYtDlpCmd(channel.url, channel.user_id);
-            const ytResult = await sshService.exec(vps.id, ytCmd);
-            const ytUrl = (ytResult.stdout || '').trim();
-            if (ytUrl.startsWith('http')) {
-              return true;   // 能拿到流地址 → 确实直播中
-            }
-            // yt-dlp 拿不到流地址 → API 缓存误报，已结束
-            console.log(`[直播监控] ${channel.name} API 缓存误报，yt-dlp 无流，判定 offline`);
-            return false;
-          } catch (_) {
-            return true;     // yt-dlp 异常（网络问题），保守信任 API
-          }
-        }
         // unknown → 降级到本地 API
       } catch (_) {}
     }

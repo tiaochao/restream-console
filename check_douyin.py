@@ -4,16 +4,16 @@
 用法: python3 check_douyin.py <douyin URL> [cookie_string]
 输出: live | offline | unknown
 
-检测逻辑（离线信号优先）:
-  任一可靠来源说 offline → 立即返回 offline
-  需要 webcast API 或 reflow 至少一个确认 live 才返回 live
-  两者均 unknown → HTML 兜底（CDN 缓存，仅参考）
-
-支持格式:
-  live.douyin.com/ROOMID
-  www.douyin.com/user/SECID
+检测逻辑:
+  1. webcast/reflow API → offline 信号 (status=4/5) 立即返回 offline
+  2. API live 信号不可信（CDN 缓存），进入流内容验证
+  3. yt-dlp 获取流地址 → 拿不到则 offline
+  4. m3u8 检查 #EXT-X-ENDLIST 标记：
+       有标记 → offline（回放或已结束）
+       无标记 + 有分片 → live（真实直播中）
+  5. FLV 流 → 读取前 64KB 确认有数据
 """
-import sys, re, json, urllib.request
+import sys, re, json, urllib.request, subprocess
 
 UA = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -21,7 +21,7 @@ UA = (
     'Chrome/120.0.0.0 Safari/537.36'
 )
 
-def http_get(url, cookies='', referer='https://live.douyin.com/'):
+def http_get(url, cookies='', referer='https://live.douyin.com/', timeout=15):
     headers = {
         'User-Agent': UA,
         'Accept': 'application/json, text/html, */*',
@@ -31,15 +31,13 @@ def http_get(url, cookies='', referer='https://live.douyin.com/'):
     if cookies:
         headers['Cookie'] = cookies
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read().decode('utf-8', errors='replace')
 
 
-# ── 方式 1：webcast room API ─────────────────────────────────────────────────
+# ── 方式 1：webcast room API（仅信任 offline 信号）────────────────────────────
 def check_room_api(web_rid, cookies):
-    """返回 (is_live: bool|None, room_id: str)
-    status 2 = 直播中, 4/5 = 已结束/封禁, 0 = 无数据(msToken缺失)
-    """
+    """返回 (is_offline: bool|None, room_id: str)"""
     url = (
         'https://live.douyin.com/webcast/room/web/enter/'
         f'?aid=6383&app_name=douyin_web&live_id=1&device_platform=web'
@@ -50,67 +48,82 @@ def check_room_api(web_rid, cookies):
     body = http_get(url, cookies)
     data = json.loads(body)
     room = (data.get('data') or {}).get('room') or {}
-
     room_id = str(room.get('id', ''))
-    status  = room.get('status')
-
-    if status == 2:          return True,  room_id
-    if status in (4, 5):     return False, room_id
-    return None, room_id
+    status = room.get('status')
+    if status in (4, 5):  return True, room_id   # 确认结束
+    return False, room_id                          # 其他状态不可信
 
 
-# ── 方式 2：webcast.amemv.com reflow（无需 Cookie，更新更快）────────────────
-def check_reflow(room_id):
-    """返回 bool|None。reflow 端点通常比 webcast API 更早反映直播结束。"""
+# ── 方式 2：reflow API（仅信任 offline 信号）────────────────────────────────
+def check_reflow_offline(room_id):
+    """返回 True 表示确认 offline，False 表示不确定"""
     if not room_id:
-        return None
+        return False
     url = f'https://webcast.amemv.com/douyin/webcast/reflow/{room_id}'
     body = http_get(url, referer='https://live.douyin.com/')
     m = re.search(r'"status"\s*:\s*(\d+)', body)
-    if m:
-        s = int(m.group(1))
-        if s == 2:           return True
-        if s in (4, 5):      return False
-    return None
+    if m and int(m.group(1)) in (4, 5):
+        return True
+    return False
 
 
-# ── 方式 3：用户主页 API（www.douyin.com/user/SECID 格式）────────────────────
-def check_user_api(sec_user_id, cookies):
-    if not cookies:
+# ── 方式 3：yt-dlp 获取流地址 ────────────────────────────────────────────────
+def get_stream_url(page_url, cookies):
+    cmd = ['yt-dlp', '--no-warnings', '--socket-timeout', '15', '-g', page_url]
+    if cookies:
+        cmd += ['--add-header', f'Cookie:{cookies}']
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=35)
+        lines = [l.strip() for l in r.stdout.strip().splitlines()
+                 if l.strip().startswith('http')]
+        return lines[0] if lines else ''
+    except Exception:
+        return ''
+
+
+# ── 方式 4a：m3u8 manifest 检查（最可靠）────────────────────────────────────
+def check_m3u8(url):
+    """
+    返回 True=直播中, False=已结束/回放, None=无法判断
+    直播流 m3u8 永远没有 #EXT-X-ENDLIST
+    VOD/回放 m3u8 在文件末尾有 #EXT-X-ENDLIST
+    """
+    try:
+        manifest = http_get(url, timeout=10)
+        if '#EXT-X-ENDLIST' in manifest:
+            return False  # 有结束标记 → VOD 或已结束的直播
+        if '#EXTINF' in manifest or '#EXT-X-STREAM-INF' in manifest:
+            return True   # 有分片且无结束标记 → 真实直播
         return None
-    url = (
-        f'https://www.douyin.com/aweme/v1/web/user/profile/other/'
-        f'?sec_user_id={sec_user_id}&device_platform=webapp&aid=6383'
-        f'&channel=channel_pc_web&version_code=170400&version_name=17.4.0'
-        f'&cookie_enabled=true&platform=PC&downlink=10'
-    )
-    body = http_get(url, cookies, referer='https://www.douyin.com/')
-    data = json.loads(body)
-    if data.get('status_code') != 0:
+    except Exception:
         return None
-    live_status = (data.get('user') or {}).get('live_status')
-    if live_status in (1, 2): return True
-    if live_status == 0:      return False
-    return None
 
 
-# ── 方式 4：HTML 解析（CDN 缓存，仅兜底）────────────────────────────────────
-def check_html(web_rid, cookies, prefetched_body=None):
-    body = prefetched_body or http_get(f'https://live.douyin.com/{web_rid}', cookies)
-    patterns = [
-        r'\\"liveStatus\\":\\"([^\\"]+)\\"',
-        r'"liveStatus"\s*:\s*"([^"]+)"',
-        r'liveStatus&quot;:&quot;([^&]+)&quot;',
-    ]
-    live_vals = {'normal', 'LIVE', 'live', 'Living', 'NORMAL'}
-    for p in patterns:
-        m = re.search(p, body)
-        if m:
-            return m.group(1) in live_vals
-    m = re.search(r'"status"\s*:\s*(\d+)', body)
-    if m:
-        return int(m.group(1)) == 2
-    return None
+# ── 方式 4b：FLV 字节验证 ─────────────────────────────────────────────────
+def check_bytes(url):
+    """读取前 64KB，确认流有持续数据输出"""
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': UA})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            chunk = resp.read(65536)
+            return len(chunk) > 10000
+    except Exception:
+        return False
+
+
+# ── 终极验证：流地址 + 内容检查 ───────────────────────────────────────────
+def verify_live(page_url, cookies):
+    stream_url = get_stream_url(page_url, cookies)
+    if not stream_url:
+        return False  # 拿不到流地址 → 未开播
+
+    if 'm3u8' in stream_url:
+        result = check_m3u8(stream_url)
+        if result is not None:
+            return result
+        # m3u8 检查失败，降级到字节验证
+
+    return check_bytes(stream_url)
 
 
 # ── 主流程 ────────────────────────────────────────────────────────────────────
@@ -121,66 +134,49 @@ def main():
     # ── live.douyin.com/ROOMID 格式 ──────────────────────────────────────────
     room_m = re.search(r'live\.douyin\.com/(\d+)', url)
     if room_m:
-        web_rid  = room_m.group(1)
-        room_id  = ''
-        api_live = None
+        web_rid = room_m.group(1)
+        room_id = ''
 
-        # 1. webcast API
+        # 1. webcast API → 仅信任 offline 信号
         try:
-            api_live, room_id = check_room_api(web_rid, cookies)
-            if api_live == False:
-                print('offline'); return      # 离线信号立刻相信
+            is_offline, room_id = check_room_api(web_rid, cookies)
+            if is_offline:
+                print('offline'); return
         except Exception:
             pass
 
-        # 2. 若无 room_id，从 HTML 提取（顺便缓存 body 供方式4复用）
-        html_body = None
+        # 2. 从 HTML 提取 room_id（若 API 未返回）
         if not room_id:
             try:
-                html_body = http_get(f'https://live.douyin.com/{web_rid}', cookies)
-                rm = re.search(r'"roomId"\s*:\s*"?(\d{15,})"?', html_body)
+                html = http_get(f'https://live.douyin.com/{web_rid}', cookies)
+                rm = re.search(r'"roomId"\s*:\s*"?(\d{15,})"?', html)
                 if rm:
                     room_id = rm.group(1)
             except Exception:
                 pass
 
-        # 3. reflow 交叉验证（比 webcast API 更新更快，无需 Cookie）
+        # 3. reflow API → 仅信任 offline 信号
         if room_id:
             try:
-                reflow_live = check_reflow(room_id)
-                if reflow_live == False:
-                    print('offline'); return  # 离线信号优先
-                if reflow_live == True and api_live != False:
-                    print('live'); return     # reflow 确认直播中
+                if check_reflow_offline(room_id):
+                    print('offline'); return
             except Exception:
                 pass
 
-        # 4. webcast API 确认直播中（reflow 未确认，但 API 说是）
-        if api_live == True:
-            print('live'); return
-
-        # 5. HTML 兜底（CDN 缓存，仅当前两步均 unknown 时使用）
+        # 4. 流内容验证（不信任任何 API 的 live 信号）
         try:
-            result = check_html(web_rid, cookies, html_body)
-            if result is not None:
-                print('live' if result else 'offline'); return
+            print('live' if verify_live(url, cookies) else 'offline')
         except Exception:
-            pass
-
-        print('unknown')
+            print('unknown')
         return
 
     # ── www.douyin.com/user/SECID 格式 ───────────────────────────────────────
     sec_m = re.search(r'(?:www\.douyin\.com|v\.douyin\.com)/user/([A-Za-z0-9_\-]+)', url)
     if sec_m:
-        sec_user_id = sec_m.group(1)
         try:
-            result = check_user_api(sec_user_id, cookies)
-            if result is not None:
-                print('live' if result else 'offline'); return
+            print('live' if verify_live(url, cookies) else 'offline')
         except Exception:
-            pass
-        print('unknown')
+            print('unknown')
         return
 
     print('unknown')

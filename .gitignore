@@ -1,5 +1,6 @@
 node_modules/
 .gstack/
+.codex/
 data/*.sqlite
 data/*.sqlite-*
 .env

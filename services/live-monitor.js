@@ -3,20 +3,9 @@ const { getSetting, defaultUserId } = require('../db');
 const sshService = require('./ssh');
 const taskManager = require('./task-manager');
 const platformApi = require('./platform-api');
+const { dqEsc, shSingleQuote } = require('../utils/shell-escape');
 
 const DOUYIN_CHECK_SCRIPT = '/opt/restream-console/check_douyin.py';
-
-function dqEsc(s) {
-  return String(s)
-    .replace(/\\/g, '\\\\')
-    .replace(/`/g, '\\`')
-    .replace(/\$/g, '\\$')
-    .replace(/"/g, '\\"');
-}
-
-function shSingleQuote(s) {
-  return `'${String(s).replace(/'/g, `'\\''`)}'`;
-}
 
 function getDouyinCookies(userId) {
   return getSetting('douyin_cookies', userId) || '';

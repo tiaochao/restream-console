@@ -20,6 +20,7 @@ const {
   AUTO_RECORDING_PREFIX,
 } = require('./ffmpeg-args');
 const { dqEsc, shSingleQuote } = require('../utils/shell-escape');
+const { syncDouyinHelper, ensureRemoteRuntime, syncAutoRecordingMediaFile } = require('./task-ssh');
 
 const PLATFORM_RTMP = {
   youtube: 'rtmp://a.rtmp.youtube.com/live2',
@@ -45,22 +46,6 @@ function raceAbort(promise, signal) {
 }
 
 let startQueue = Promise.resolve();
-async function syncDouyinHelper(vpsId, userId) {
-  const scriptPath = path.join(__dirname, '..', 'check_douyin.py');
-  const script = fs.readFileSync(scriptPath, 'utf8');
-  const scriptB64 = Buffer.from(script).toString('base64');
-  await sshService.exec(vpsId, [
-    'mkdir -p /opt/restream-console',
-    `printf %s ${shSingleQuote(scriptB64)} | base64 -d > /opt/restream-console/check_douyin.py`,
-    'chmod +x /opt/restream-console/check_douyin.py',
-  ].join(' && '), userId);
-}
-
-async function ensureRemoteRuntime(vpsId, userId, options = {}) {
-  await sshService.exec(vpsId, remoteDependencyInstallCommand(), userId);
-  if (options.douyinHelper) await syncDouyinHelper(vpsId, userId);
-}
-
 function getDouyinCookies(userId) {
   return decrypt(getSetting('douyin_cookies', userId) || '') || '';
 }

@@ -4,6 +4,7 @@ const db = require('../db');
 const sshService = require('../services/ssh');
 const fs = require('fs');
 const path = require('path');
+const { encrypt, decrypt } = require('../services/crypto');
 
 const TITLE = 'VPS管理 - 转推控制台';
 const UPLOAD_DIR = '/root/restream_uploads';
@@ -122,8 +123,8 @@ router.post('/', (req, res) => {
       input.port,
       input.username,
       input.auth_type,
-      input.auth_type === 'password' ? input.password : null,
-      input.auth_type === 'key' ? input.private_key : null
+      input.auth_type === 'password' ? encrypt(input.password) : null,
+      input.auth_type === 'key' ? encrypt(input.private_key) : null
     );
     res.redirect('/vps?toast=' + encodeURIComponent('VPS 添加成功') + '&type=success');
   } catch (e) {

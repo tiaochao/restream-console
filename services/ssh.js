@@ -1,5 +1,6 @@
 ﻿const { NodeSSH } = require('node-ssh');
 const db = require('../db');
+const { decrypt } = require('./crypto');
 
 const pool = new Map();
 
@@ -16,8 +17,8 @@ function buildConfig(vps) {
     keepaliveInterval: 30000,
     keepaliveCountMax: 3,
   };
-  if (vps.auth_type === 'key' && vps.private_key) config.privateKey = vps.private_key;
-  else config.password = vps.password;
+  if (vps.auth_type === 'key' && vps.private_key) config.privateKey = decrypt(vps.private_key);
+  else config.password = decrypt(vps.password);
   return config;
 }
 

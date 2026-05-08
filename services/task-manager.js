@@ -4,6 +4,7 @@ const sshService = require('./ssh');
 const { resolveDouyinStreamUrl } = require('./platform-api');
 const fs = require('fs');
 const path = require('path');
+const { decrypt } = require('./crypto');
 
 const PLATFORM_RTMP = {
   youtube: 'rtmp://a.rtmp.youtube.com/live2',
@@ -198,7 +199,7 @@ async function ensureRemoteRuntime(vpsId, userId, options = {}) {
 }
 
 function getDouyinCookies(userId) {
-  return getSetting('douyin_cookies', userId) || '';
+  return decrypt(getSetting('douyin_cookies', userId) || '') || '';
 }
 
 function buildCommand(task) {

@@ -4,6 +4,7 @@ const db = require('../db');
 const { hashPassword, verifyPassword } = require('../db');
 const platformApi = require('../services/platform-api');
 const youtubeMonitor = require('../services/youtube-monitor');
+const { encrypt, decrypt } = require('../services/crypto');
 
 const TITLE = '设置 - 转推控制台';
 const MAX_COOKIE_LENGTH = 20000;
@@ -47,7 +48,7 @@ function getCfg(userId) {
     youtube_api_key: getSetting(userId, 'youtube_api_key') || '',
     youtube_api_keys: apiKeys,
     youtube_api_key_count: normalizeYouTubeApiKeys(apiKeys).split('\n').filter(Boolean).length,
-    douyin_cookies: getSetting(userId, 'douyin_cookies') || '',
+    douyin_cookies: decrypt(getSetting(userId, 'douyin_cookies') || '') || '',
   };
 }
 
@@ -113,7 +114,7 @@ router.post('/cookies', (req, res) => {
   if (cookies.length > MAX_COOKIE_LENGTH) {
     return renderSettings(req, res, { status: 400, error: 'Cookie 太长，请确认是否粘贴了正确内容' });
   }
-  setSetting(req.session.userId, 'douyin_cookies', cookies);
+  setSetting(req.session.userId, 'douyin_cookies', cookies ? encrypt(cookies) : '');
   renderSettings(req, res, { success: 'Cookie 已保存' });
 });
 

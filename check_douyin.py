@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """
 抖音直播状态检测脚本
-用法: python3 check_douyin.py <douyin URL> [cookie_string]
+用法:
+  python3 check_douyin.py <douyin URL> [cookie_string]
+  python3 check_douyin.py --stream-url <douyin URL> [cookie_string]
 输出: live | offline | unknown
 
 检测逻辑:
   1. webcast/reflow API → status=4/5 (offline 信号可信) 立即返回 offline
   2. API live 信号完全不信任 → 进入流内容验证
   3. yt-dlp 优先获取 m3u8 地址，获取不到则取 FLV
-  4. m3u8: 检查 #EXT-X-ENDLIST 标记（有=回放/已结束，无=直播中）
+  4. m3u8: 先追踪 master playlist 的子清单，再检查 #EXT-X-ENDLIST
   5. FLV:  检查 Content-Length 响应头（有=VoD 有限文件，无=无限直播流）
 """
-import sys, re, json, urllib.request, urllib.error, subprocess
+import sys, re, json, time, urllib.request, urllib.error, urllib.parse, subprocess
 
 UA = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -32,11 +34,47 @@ def http_get(url, cookies='', referer='https://live.douyin.com/', timeout=15):
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read().decode('utf-8', errors='replace')
 
+def normalize_url(url, cookies=''):
+    url = (url or '').strip()
+    if not url:
+        return ''
+    if not re.match(r'https?://', url, re.I):
+        url = 'https://' + url.lstrip('/')
+
+    # Follow Douyin short links so shared URLs resolve to a room or profile URL.
+    if re.search(r'://v\.douyin\.com/', url, re.I):
+        headers = {'User-Agent': UA, 'Accept-Language': 'zh-CN,zh;q=0.9'}
+        if cookies:
+            headers['Cookie'] = cookies
+        for method in ('HEAD', 'GET'):
+            try:
+                req = urllib.request.Request(url, headers=headers, method=method)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    url = resp.geturl()
+                    break
+            except Exception:
+                pass
+
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower()
+    path = parsed.path or '/'
+
+    if host == 'live.douyin.com':
+        room_m = re.search(r'/(\d+)', path)
+        if room_m:
+            return f'https://live.douyin.com/{room_m.group(1)}'
+
+    if host.endswith('douyin.com'):
+        user_m = re.search(r'/user/([A-Za-z0-9_\-]+)', path)
+        if user_m:
+            return f'https://www.douyin.com/user/{user_m.group(1)}'
+
+    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
+
 
 # ── API 检测（仅用于 offline 信号）──────────────────────────────────────────
 
-def check_room_api(web_rid, cookies):
-    """返回 (is_offline: bool, room_id: str)"""
+def fetch_room_api(web_rid, cookies):
     url = (
         'https://live.douyin.com/webcast/room/web/enter/'
         f'?aid=6383&app_name=douyin_web&live_id=1&device_platform=web'
@@ -45,11 +83,47 @@ def check_room_api(web_rid, cookies):
         f'&web_rid={web_rid}&msToken='
     )
     body  = http_get(url, cookies)
-    data  = json.loads(body)
+    return json.loads(body)
+
+def check_room_api(web_rid, cookies):
+    """返回 (is_offline: bool, room_id: str)"""
+    data  = fetch_room_api(web_rid, cookies)
     room  = (data.get('data') or {}).get('room') or {}
     room_id = str(room.get('id', ''))
     status  = room.get('status')
     return status in (4, 5), room_id   # True=确认 offline
+
+def pick_stream_url(stream_url):
+    if not isinstance(stream_url, dict):
+        return ''
+
+    hls_map = stream_url.get('hls_pull_url_map') or {}
+    flv_map = stream_url.get('flv_pull_url') or {}
+    flv_full = stream_url.get('flv_pull_url_full') or {}
+
+    for source in (hls_map, flv_map, flv_full):
+        if not isinstance(source, dict):
+            continue
+        for key in ('FULL_HD1', 'HD1', 'SD1', 'SD2', 'ORIGIN'):
+            url = source.get(key)
+            if isinstance(url, str) and url.startswith('http'):
+                return url
+        for url in source.values():
+            if isinstance(url, str) and url.startswith('http'):
+                return url
+    return ''
+
+def resolve_room_api_stream(web_rid, cookies):
+    if not cookies:
+        return '', '', 'no_cookie'
+    data = fetch_room_api(web_rid, cookies)
+    room = (data.get('data') or {}).get('room') or {}
+    room_id = str(room.get('id', ''))
+    status = room.get('status')
+    if status in (4, 5):
+        return '', room_id, 'offline'
+    stream_url = pick_stream_url(room.get('stream_url') or {})
+    return stream_url, room_id, 'room-api' if stream_url else 'room-api-no-stream'
 
 def check_reflow_offline(room_id):
     if not room_id:
@@ -59,10 +133,109 @@ def check_reflow_offline(room_id):
     m    = re.search(r'"status"\s*:\s*(\d+)', body)
     return bool(m and int(m.group(1)) in (4, 5))
 
+def check_user_profile(sec_user_id, cookies):
+    """返回 (is_live: bool|None, room_id: str)。没有 Cookie 时无法可靠调用。"""
+    if not cookies:
+        return None, ''
+    api_url = (
+        'https://www.douyin.com/aweme/v1/web/user/profile/other/'
+        f'?sec_user_id={urllib.parse.quote(sec_user_id)}'
+        '&device_platform=webapp&aid=6383&channel=channel_pc_web'
+        '&version_code=170400&version_name=17.4.0&cookie_enabled=true'
+        '&platform=PC&downlink=10'
+    )
+    body = http_get(api_url, cookies, referer='https://www.douyin.com/')
+    data = json.loads(body)
+    if data.get('status_code') != 0:
+        return None, ''
+    user = data.get('user') or {}
+    live_status = user.get('live_status')
+    room_id = str(user.get('room_id_str') or user.get('room_id') or '')
+    if live_status in (1, 2):
+        return True, room_id
+    if live_status in (0, 3, 4):
+        return False, room_id
+    return None, room_id
+
+
+# ── 直播直链解析 ─────────────────────────────────────────────────────────────
+
+def clean_stream_url(url):
+    url = (url or '').strip().strip('"\'')
+    url = url.replace('\\u0026', '&').replace('\\/', '/').replace('\\\\/', '/')
+    try:
+        url = bytes(url, 'utf-8').decode('unicode_escape')
+    except Exception:
+        pass
+    return urllib.parse.unquote(url)
+
+def extract_stream_from_html(html):
+    if not html:
+        return ''
+    patterns = [
+        r'https?:\\?/\\?/[^"\'<>\s]+?\.m3u8[^"\'<>\s]*',
+        r'https?:\\?/\\?/[^"\'<>\s]+?\.flv[^"\'<>\s]*',
+        r'https?://[^"\'<>\s]+?\.m3u8[^"\'<>\s]*',
+        r'https?://[^"\'<>\s]+?\.flv[^"\'<>\s]*',
+    ]
+    for pattern in patterns:
+        for raw in re.findall(pattern, html):
+            url = clean_stream_url(raw)
+            if url.startswith('http') and ('.m3u8' in url or '.flv' in url):
+                return url
+    return ''
+
+def get_stream_url_by_streamlink(page_url, cookies):
+    base = [
+        'streamlink',
+        '--stream-url',
+        '--http-header', f'User-Agent={UA}',
+        '--http-header', 'Referer=https://live.douyin.com/',
+    ]
+    if cookies:
+        base += ['--http-header', f'Cookie={cookies}']
+    try:
+        r = subprocess.run(base + [page_url, 'best'],
+                           capture_output=True, text=True, timeout=35)
+        lines = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith('http')]
+        return lines[0] if lines else ''
+    except Exception:
+        return ''
 
 # ── yt-dlp 获取流地址（优先 HLS）────────────────────────────────────────────
 
 def get_stream_url(page_url, cookies):
+    page_url = normalize_url(page_url, cookies)
+
+    room_m = re.search(r'live\.douyin\.com/(\d+)', page_url)
+    if room_m:
+        web_rid = room_m.group(1)
+        try:
+            stream_url, room_id, _ = resolve_room_api_stream(web_rid, cookies)
+            if stream_url:
+                return stream_url
+        except Exception:
+            room_id = ''
+
+        try:
+            html = http_get(f'https://live.douyin.com/{web_rid}', cookies)
+            stream_url = extract_stream_from_html(html)
+            if stream_url:
+                return stream_url
+        except Exception:
+            pass
+
+    sec_m = re.search(r'(?:www\.douyin\.com|v\.douyin\.com)/user/([A-Za-z0-9_\-]+)', page_url)
+    if sec_m and cookies:
+      try:
+          profile_live, room_id = check_user_profile(sec_m.group(1), cookies)
+          if profile_live is True and room_id:
+              stream_url, _, _ = resolve_room_api_stream(room_id, cookies)
+              if stream_url:
+                  return stream_url
+      except Exception:
+          pass
+
     base = ['yt-dlp', '--no-warnings', '--socket-timeout', '15', '-g']
     if cookies:
         base += ['--add-header', f'Cookie:{cookies}']
@@ -82,18 +255,33 @@ def get_stream_url(page_url, cookies):
         r = subprocess.run(base + [page_url],
                            capture_output=True, text=True, timeout=35)
         lines = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith('http')]
-        return lines[0] if lines else ''
+        if lines:
+            return lines[0]
     except Exception:
-        return ''
+        pass
+
+    return get_stream_url_by_streamlink(page_url, cookies)
 
 
 # ── 流内容验证 ───────────────────────────────────────────────────────────────
 
+def first_hls_variant(manifest, base_url):
+    lines = [line.strip() for line in manifest.splitlines()]
+    for idx, line in enumerate(lines):
+        if line.startswith('#EXT-X-STREAM-INF'):
+            for candidate in lines[idx + 1:]:
+                if not candidate or candidate.startswith('#'):
+                    continue
+                return urllib.parse.urljoin(base_url, candidate)
+    return ''
+
 def is_live_stream(url):
     """
     通过 HTTP 响应头 + 内容判断直播流 vs VoD 回放
-      m3u8: #EXT-X-ENDLIST 在文件末尾 → VoD；缺失 → 直播
-      FLV/其他: Content-Length 存在 → 有限文件 → VoD；不存在 → 无限直播流
+      m3u8: 追踪 master playlist 到媒体 playlist 后判断：
+            #EXT-X-ENDLIST / VOD → 非直播；有分片且无结束标记 → 直播
+      FLV/其他: Transfer-Encoding:chunked 无 Content-Length → 直播；
+               Content-Length 存在 → VoD；两者都无 → 持续读 2s 验证
     返回 True=直播中, False=非直播, None=无法判断
     """
     try:
@@ -104,21 +292,40 @@ def is_live_stream(url):
 
         # ── HLS 检测 ──
         if 'm3u8' in url or 'mpegurl' in ctype:
-            manifest = resp.read(16384).decode('utf-8', errors='replace')
-            if '#EXT-X-ENDLIST' in manifest:
+            manifest = resp.read(1024 * 1024).decode('utf-8', errors='replace')
+
+            # Master playlist 自身没有 ENDLIST，不能作为直播证据；继续检查媒体 playlist。
+            if '#EXT-X-STREAM-INF' in manifest and '#EXTINF' not in manifest:
+                variant_url = first_hls_variant(manifest, url)
+                return is_live_stream(variant_url) if variant_url else None
+
+            if '#EXT-X-ENDLIST' in manifest or '#EXT-X-PLAYLIST-TYPE:VOD' in manifest:
                 return False   # 结束标记 → VoD / 已结束
-            if '#EXTINF' in manifest or '#EXT-X-STREAM-INF' in manifest:
-                return True    # 有分片、无结束标记 → 真实直播
+            if '#EXTINF' in manifest:
+                return True    # 媒体分片存在、无结束标记 → 真实直播
             return None        # manifest 内容异常
 
         # ── FLV / 其他格式 ──
+        # Transfer-Encoding: chunked 且无 Content-Length → 确定是无限流 → 直播
+        transfer_enc = (resp.headers.get('Transfer-Encoding') or '').lower()
+        if 'chunked' in transfer_enc and content_length is None:
+            chunk = resp.read(8192)
+            return len(chunk) > 100
+
+        # Content-Length 存在 → 有限文件 → VoD 回放
         if content_length is not None:
-            # 有 Content-Length → 有限大小的文件 → VoD 回放
             return False
 
-        # 无 Content-Length（无限流）→ 读几 KB 确认有数据
-        chunk = resp.read(32768)
-        return len(chunk) > 10000
+        # 两个头部都不存在：持续读取验证 —— 直播流会持续产出数据，VoD 连接在传完后关闭
+        chunk1 = resp.read(8192)
+        if len(chunk1) < 100:
+            return False
+        time.sleep(2)
+        try:
+            chunk2 = resp.read(1)
+            return True   # 2 秒后仍有数据 → 直播进行中
+        except Exception:
+            return False  # 连接已关闭 → VoD 已传完
 
     except urllib.error.HTTPError as e:
         if e.code in (403, 404, 410):
@@ -143,8 +350,21 @@ def verify_live(page_url, cookies):
 # ── 主流程 ────────────────────────────────────────────────────────────────────
 
 def main():
-    url     = sys.argv[1] if len(sys.argv) > 1 else ''
-    cookies = sys.argv[2] if len(sys.argv) > 2 else ''
+    stream_mode = len(sys.argv) > 1 and sys.argv[1] == '--stream-url'
+    arg_offset = 1 if stream_mode else 0
+    cookies = sys.argv[2 + arg_offset] if len(sys.argv) > 2 + arg_offset else ''
+    url     = normalize_url(sys.argv[1 + arg_offset] if len(sys.argv) > 1 + arg_offset else '', cookies)
+
+    if stream_mode:
+        try:
+            stream_url = get_stream_url(url, cookies)
+            if stream_url:
+                print(stream_url)
+                return
+            print('')
+        except Exception:
+            print('')
+        return
 
     # ── live.douyin.com/ROOMID ───────────────────────────────────────────────
     room_m = re.search(r'live\.douyin\.com/(\d+)', url)
@@ -188,6 +408,17 @@ def main():
     # ── www.douyin.com/user/SECID ────────────────────────────────────────────
     sec_m = re.search(r'(?:www\.douyin\.com|v\.douyin\.com)/user/([A-Za-z0-9_\-]+)', url)
     if sec_m:
+        sec_user_id = sec_m.group(1)
+        try:
+            profile_live, room_id = check_user_profile(sec_user_id, cookies)
+            if profile_live is False:
+                print('offline'); return
+            if profile_live is True and room_id:
+                room_url = f'https://live.douyin.com/{room_id}'
+                print('live' if verify_live(room_url, cookies) else 'offline')
+                return
+        except Exception:
+            pass
         try:
             print('live' if verify_live(url, cookies) else 'offline')
         except Exception:

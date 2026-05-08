@@ -1,38 +1,111 @@
 # Restream Console
 
-直播转推管理控制台。在浏览器中管理多台 VPS，通过 SSH 远程控制 yt-dlp + FFmpeg，将抖音、TikTok 等平台的直播流转推到 YouTube、TikTok 等目标平台。
+面向多 VPS 的直播转推控制台。通过浏览器统一管理直播源、推流码、执行 VPS、媒体文件和转推任务，适合把抖音、B 站、快手、TikTok、YouTube 等直播源转推到 YouTube、TikTok 或自定义 RTMP 平台。
 
-![Node.js](https://img.shields.io/badge/Node.js-24-green) ![SQLite](https://img.shields.io/badge/SQLite-built--in-blue) ![Docker](https://img.shields.io/badge/Docker-ready-blue) ![License](https://img.shields.io/badge/license-MIT-green)
+![Node.js](https://img.shields.io/badge/Node.js-22%2B-green)
+![SQLite](https://img.shields.io/badge/SQLite-node%3Asqlite-blue)
+![Docker](https://img.shields.io/badge/Docker-ready-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-## 功能
+## 项目定位
 
-- **转推任务** — 通过页面 URL 拉流（yt-dlp 解析），FFmpeg 推送到 YouTube / TikTok / 自定义 RTMP；支持自动重启、备用 URL 故障切换
-- **直播监控** — 定时检测源频道开播状态，开播后自动触发对应转推任务
-- **VPS 管理** — 支持密码和 SSH 私钥两种认证，一键安装 yt-dlp + FFmpeg 依赖，心跳检测在线状态
-- **推流密钥库** — 集中管理 YouTube、TikTok 等多平台推流密钥，可与任务快速绑定
-- **媒体库** — 通过 SSH 管理 VPS 上的媒体文件，支持上传和扫描
-- **实时日志** — 在线查看远程 VPS 上的转推进程日志
-- **仪表盘** — 任务状态、VPS 在线数、运行时长统计，每 15 秒自动刷新
+Restream Console 不是单纯的 FFmpeg 命令生成器，而是一套直播转推运维面板：
+
+- 频道开播后自动检测、自动创建任务、自动开始转推。
+- 直播直链失效时自动重试，并可切换到录播文件维持目标平台直播。
+- 支持多用户、多 VPS、多推流密钥、多直播间并行管理。
+- 所有执行动作通过 SSH 下发到指定 VPS，控制台负责调度、状态、日志和数据管理。
+
+典型链路：
+
+```text
+直播间 / 媒体文件
+    -> Restream Console 调度
+    -> 指定 VPS 执行 yt-dlp / FFmpeg
+    -> YouTube / TikTok / 自定义 RTMP
+```
+
+## 核心能力
+
+### 频道监控与自动开播
+
+- 支持保存抖音、B 站、快手、YouTube、TikTok、自定义直播源。
+- 支持批量检测和单频道检测。
+- 支持频道开播后自动选择推流码和默认 VPS 创建转推任务。
+- 支持通过直播间链接、账号主页链接、短链接等输入智能识别频道信息。
+- 频道名称可从直播链接自动提取，也可手动填写备注，方便后期管理。
+
+### 直播转推任务
+
+- 支持直播间直接转推。
+- 支持多直播源备用地址，主源异常后自动切换。
+- 支持纯文件转播。
+- 支持直播中同步录播，源直播断开后自动切换到本场录播文件循环播放。
+- 支持限制单场录播时长和文件大小，避免 VPS 磁盘被占满。
+- 支持无转码 copy 模式，优先降低 CPU 占用。
+- 支持自动重启、远程停止、日志查看和状态巡检。
+
+### VPS 管理
+
+- 支持多台执行 VPS。
+- 支持 SSH 密码或私钥连接。
+- 支持在线检测、依赖检查和依赖安装。
+- 支持查看 VPS 上的媒体文件，便于确认、复用和清理。
+- 任务按指定 VPS 执行，避免控制台服务器承担大文件上传和 FFmpeg 推流压力。
+
+### 推流码库
+
+- 集中管理 YouTube、TikTok、自定义 RTMP 等推流密钥。
+- 支持名称、备注、平台分类和后期编辑。
+- 支持绑定默认 VPS，让自动录播、文件转播和转推任务能找到正确执行机器。
+- 任务列表会尽量展示频道名称和推流密钥名称，减少排查时的混淆。
+
+### 媒体库
+
+- 文件上传到执行 VPS，而不是控制台服务器。
+- 支持将 VPS 上的媒体文件作为纯文件转播源。
+- 支持作为直播中断后的兜底播放素材。
+- 媒体库更偏向 VPS 文件管理入口，任务创建时也可以直接选择或上传文件。
+
+### 多用户与隔离
+
+- 支持管理员和普通用户。
+- 用户之间的频道、任务、推流码、Cookie、VPS 绑定等数据隔离。
+- 管理员可维护系统配置和用户账号。
+- 敏感信息不会在列表中直接明文展示。
+
+## 支持范围
+
+| 类型 | 支持内容 |
+| --- | --- |
+| 直播源 | 抖音、B 站、快手、YouTube、TikTok、自定义 URL |
+| 目标平台 | YouTube、TikTok、自定义 RTMP |
+| 执行方式 | 直播转推、文件转播、直播转录播兜底 |
+| VPS 连接 | SSH 密码、SSH 私钥 |
+| 运行方式 | 本地 Node.js、Docker Compose、SSH 部署脚本 |
+
+> 平台直播页面和风控策略会变化，检测和直链解析无法保证永远 100% 成功。生产环境建议配置有效 Cookie、多直播源备用、自动录播兜底和任务健康巡检。
 
 ## 技术栈
 
-| 层 | 选型 |
-|----|------|
-| Web 框架 | Express.js |
-| 模板引擎 | EJS + express-ejs-layouts |
-| 数据库 | Node.js 内置 SQLite（node:sqlite） |
-| SSH | node-ssh |
-| 前端 | Tailwind CSS（CDN）|
-| 容器化 | Docker + docker-compose |
-| 部署 | 自定义 deploy.js 脚本，SSH 同步 + Docker 重建 |
+| 模块 | 技术 |
+| --- | --- |
+| Web 服务 | Express.js |
+| 页面模板 | EJS + express-ejs-layouts |
+| 数据库 | Node.js 内置 SQLite (`node:sqlite`) |
+| 远程执行 | node-ssh |
+| 转推执行 | yt-dlp + FFmpeg |
+| 前端样式 | Tailwind CSS |
+| 部署 | Docker Compose / SSH 部署脚本 |
 
 ## 快速开始
 
-### 前置要求
+### 环境要求
 
-- Node.js 22+（使用内置 `node:sqlite`，无需额外安装 better-sqlite3）
-- 至少一台 Linux VPS，已开放 SSH 访问
-- VPS 上需预装 FFmpeg 和 yt-dlp（可在应用内一键安装）
+- Node.js 22+，推荐 Node.js 24。
+- 一台或多台 Linux VPS。
+- VPS 可通过 SSH 登录。
+- VPS 上需要 `ffmpeg`、`yt-dlp`、`python3`，可在控制台内安装或同步。
 
 ### 本地运行
 
@@ -41,169 +114,118 @@ git clone https://github.com/your-username/restream-console.git
 cd restream-console
 
 npm install
-
-# 复制并编辑环境变量
 cp .env.example .env
-# 至少设置 SESSION_SECRET
-
 npm start
-# 访问 http://localhost:3000
 ```
 
-首次启动自动创建 `data/db.sqlite`，并写入初始管理员账户（见首次登录说明）。
+访问：
 
-### Docker 部署
+```text
+http://localhost:3000
+```
+
+首次启动会自动创建 SQLite 数据库：
+
+```text
+data/db.sqlite
+```
+
+生产环境请务必备份该目录。
+
+## Docker 部署
 
 ```bash
-# 在 VPS 上
 git clone https://github.com/your-username/restream-console.git
 cd restream-console
 
 cp .env.example .env
-# 编辑 .env，设置 SESSION_SECRET 和管理员密码
-
 docker compose up -d
 ```
 
-服务监听 `3000` 端口，数据持久化到 `./data/` 目录。
-
-### 一键部署到 VPS
-
-如果 VPS 信息已录入系统，可使用内置部署脚本：
-
-```bash
-# 同步代码 + 重建容器（默认目标 VPS ID=3）
-node deploy.js
-
-# 指定其他 VPS
-node deploy.js 1
-```
-
-脚本通过 SSH 将源码同步到 `/opt/restream-console`，然后重建 Docker 镜像并替换容器。
+服务默认监听 `3000` 端口，建议放在 Nginx / HTTPS 反向代理后面。
 
 ## 环境变量
 
-复制 `.env.example` 并按需修改：
+常用配置：
 
 ```env
-SESSION_SECRET=your-random-secret-here   # 必填，生产环境强制要求
-ADMIN_PASSWORD=your-admin-password        # 首次启动时自动创建 admin 账户
-PORT=3000                                 # 监听端口，默认 3000
-NODE_ENV=production                       # 生产环境设为 production
-TRUST_PROXY=true                          # 在 Nginx 反代后面时设为 true
-ALLOW_REGISTRATION=false                  # 是否开放注册，默认 false
+PORT=3000
+NODE_ENV=production
+SESSION_SECRET=replace-with-a-long-random-secret
+ADMIN_PASSWORD=replace-with-a-strong-password
+TRUST_PROXY=true
+ALLOW_REGISTRATION=false
 ```
 
-## VPS 依赖
+说明：
 
-在 VPS 页面点击「安装依赖」自动执行，或手动运行：
+- `SESSION_SECRET`：生产环境必填，必须使用强随机字符串。
+- `ADMIN_PASSWORD`：首次启动时用于创建默认管理员密码。
+- `TRUST_PROXY`：使用 Nginx、宝塔、Cloudflare 等反向代理时建议开启。
+- `ALLOW_REGISTRATION`：是否开放用户自助注册，默认建议关闭。
+
+## VPS 准备
+
+可在控制台的 VPS 页面一键安装依赖，也可以手动安装：
 
 ```bash
-apt install -y ffmpeg curl wget
+apt update
+apt install -y ffmpeg curl wget python3
 
-# 安装 yt-dlp（独立二进制，无需 Python）
 wget -O /usr/local/bin/yt-dlp \
   https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux
 chmod +x /usr/local/bin/yt-dlp
 ```
 
+转推任务会在执行 VPS 上运行，日志通常写入：
+
+```text
+/tmp/restream_<taskId>.log
+```
+
+## 日常使用流程
+
+1. 添加 VPS，并确认 SSH 连接正常。
+2. 添加推流码，选择目标平台和默认 VPS。
+3. 添加频道监控，填入直播间链接或账号主页链接。
+4. 开启自动启动开关。
+5. 频道开播后，系统自动检测并创建转推任务。
+6. 在任务管理中查看状态，在日志页面排查异常。
+7. 如需兜底，开启直播同步录播，让源直播断开后继续播放录播文件。
+
 ## 项目结构
 
-```
+```text
 restream-console/
 ├── server.js              # Express 入口
-├── db.js                  # SQLite 初始化 & Schema
-├── deploy.js              # 一键部署脚本
-├── reset-password.js      # 密码重置工具
-├── middleware/
-│   ├── auth.js            # Session 鉴权
-│   └── csrf.js            # CSRF 防护
-├── routes/                # 路由（每个模块一个文件）
-│   ├── auth.js, dashboard.js, vps.js, tasks.js
-│   ├── channels.js, stream-keys.js, media.js
-│   ├── logs.js, settings.js
-├── services/
-│   ├── ssh.js             # SSH 连接池
-│   ├── task-manager.js    # 任务生命周期管理
-│   ├── live-monitor.js    # 开播检测调度
-│   └── platform-api.js   # 各平台 API（抖音等）
-├── views/                 # EJS 模板
-│   ├── layout.ejs         # 全局布局（侧边栏、全局 fetch 拦截）
-│   └── *.ejs              # 各页面模板
-├── scripts/
-│   ├── check.js           # 环境自检
-│   └── smoke.js           # 冒烟测试
-└── data/                  # 运行时生成（SQLite 文件）
+├── db.js                  # SQLite 初始化和 Schema
+├── deploy.js              # SSH 同步部署脚本
+├── reset-password.js      # 管理员密码重置工具
+├── check_douyin.py        # 抖音检测和解析辅助脚本
+├── middleware/            # 认证、CSRF 等中间件
+├── routes/                # 页面和 API 路由
+├── services/              # SSH、任务管理、直播监控、平台解析
+├── views/                 # EJS 页面模板
+├── scripts/               # 自检和冒烟测试脚本
+└── data/                  # 运行时数据，包含 SQLite 数据库
 ```
 
-## 数据库 Schema
+## 运维建议
 
-5 张核心表：
-
-| 表 | 说明 |
-|----|------|
-| `users` | 用户账户，支持角色（admin/user） |
-| `vps` | VPS 配置，密码或私钥认证 |
-| `tasks` | 转推任务，含 PID、日志路径、自动重启配置 |
-| `stream_keys` | 推流密钥库，按平台分类 |
-| `source_channels` | 源频道配置，支持自动触发规则 |
-
-数据文件位于 `data/db.sqlite`，需做好定期备份。
-
-## 转推原理
-
-```
-源直播间 URL
-    │
-    ▼ SSH
-  yt-dlp -g "URL"          # 解析出真实流地址
-    │
-    ▼
-  ffmpeg -re -i pipe:0     # 读取流
-    -c:v copy -c:a copy    # 不转码，直接复制
-    -f flv "RTMP/KEY"      # 推送到目标平台
-    │
-    ▼
-  nohup 后台运行，日志写到 /tmp/restream_<taskId>.log
-```
-
-进程 PID 写入数据库，用于后续停止任务和状态检测（`kill -0 PID`）。
-
-## Nginx 反代参考
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name your-domain.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-配合 `.env` 中设置 `TRUST_PROXY=true` 使 Session Cookie 在 HTTPS 下正常工作。
-
-## 找回密码
-
-```bash
-# 在服务器上（容器外）
-node reset-password.js admin 新密码
-
-# Docker 环境
-docker exec restream-console node reset-password.js admin 新密码
-```
+- 给不同用户配置各自的 Cookie、频道和推流码，避免数据混淆。
+- 一台普通 VPS 同时跑多个直播间时，优先使用不转码模式。
+- 定期清理录播文件和临时媒体文件。
+- 定期备份 `data/db.sqlite`。
+- YouTube Studio 里的直播事件、串流码、可见性和排程状态仍需要正确配置；系统只能确认 RTMP 连接和 FFmpeg 推流状态，不能替代 YouTube 后台的直播事件管理。
+- 如果直播源平台触发风控，建议配置 Cookie、减少检测频率、使用备用直播源，并开启录播兜底。
 
 ## 安全说明
 
-- 所有表单和 AJAX 请求均有 CSRF 防护
-- SSH 私钥加密存储（建议部署后限制 VPS 机器访问权限）
-- 推流密钥在列表中默认遮蔽，点击才显示
-- 生产环境必须设置强随机 `SESSION_SECRET`，Cookie 使用 `httpOnly + secure + sameSite=lax`
-- Shell 命令参数均经过转义，防止注入（yt-dlp URL、RTMP 地址、文件路径）
+- 控制台会保存 VPS、Cookie、推流码等敏感信息，请只部署在可信环境。
+- 生产环境必须使用 HTTPS。
+- 不要把真实 Cookie、SSH 私钥、推流密钥提交到 GitHub。
+- 普通用户和管理员权限应分开使用。
+- 仅转播你拥有权利或已获授权的内容，并遵守源平台和目标平台规则。
 
 ## License
 

@@ -1,96 +1,88 @@
-const { NodeSSH } = require('node-ssh');
+﻿const { NodeSSH } = require('node-ssh');
 const db = require('../db');
 
-// 连接池: Map<vpsId, NodeSSH>
 const pool = new Map();
 
-async function connect(vpsId) {
-  if (pool.has(vpsId)) {
-    const conn = pool.get(vpsId);
-    // isConnected() 在网络抖动后可能误报 true，验证一下
-    if (conn.isConnected()) {
-      try {
-        await conn.execCommand('true');
-        return conn;
-      } catch (_) {
-        // 连接实际已死，清掉重连
-        try { conn.dispose(); } catch (_) {}
-        pool.delete(vpsId);
-      }
-    } else {
-      pool.delete(vpsId);
-    }
-  }
+function poolKey(vpsId, userId) {
+  return userId ? `${userId}:${vpsId}` : `global:${vpsId}`;
+}
 
-  const vps = db.prepare('SELECT * FROM vps WHERE id = ?').get(vpsId);
-  if (!vps) throw new Error(`VPS ${vpsId} 不存在`);
-
-  const ssh = new NodeSSH();
+function buildConfig(vps) {
   const config = {
     host: vps.host,
-    port: vps.port || 22,
+    port: parseInt(vps.port, 10) || 22,
     username: vps.username || 'root',
     readyTimeout: 15000,
-    keepaliveInterval: 30000, // 每 30s 发一次心跳，防止连接空闲被踢
+    keepaliveInterval: 30000,
     keepaliveCountMax: 3,
   };
+  if (vps.auth_type === 'key' && vps.private_key) config.privateKey = vps.private_key;
+  else config.password = vps.password;
+  return config;
+}
 
-  if (vps.auth_type === 'key' && vps.private_key) {
-    config.privateKey = vps.private_key;
-  } else {
-    config.password = vps.password;
+async function connect(vpsId, userId = null) {
+  const key = poolKey(vpsId, userId);
+  const cached = pool.get(key);
+  if (cached) {
+    if (cached.isConnected()) {
+      try {
+        await cached.execCommand('true');
+        return cached;
+      } catch (_) {
+        try { cached.dispose(); } catch (_) {}
+      }
+    }
+    pool.delete(key);
   }
 
-  await ssh.connect(config);
-  pool.set(vpsId, ssh);
+  const vps = userId
+    ? db.prepare('SELECT * FROM vps WHERE id = ? AND user_id = ?').get(vpsId, userId)
+    : db.prepare('SELECT * FROM vps WHERE id = ?').get(vpsId);
+  if (!vps) throw new Error(`VPS ${vpsId} 不存在或无权限`);
+
+  const ssh = new NodeSSH();
+  await ssh.connect(buildConfig(vps));
+  pool.set(key, ssh);
   return ssh;
 }
 
-async function exec(vpsId, command) {
+async function exec(vpsId, command, userId = null) {
   try {
-    const ssh = await connect(vpsId);
+    const ssh = await connect(vpsId, userId);
     return await ssh.execCommand(command);
   } catch (e) {
-    // 连接已断开时清除缓存，等一会再重试一次
     if (/handshake|closed|ended|lost|ECONNRESET|ETIMEDOUT/i.test(e.message)) {
-      disconnect(vpsId);
+      disconnect(vpsId, userId);
       await new Promise(r => setTimeout(r, 1500));
-      const ssh = await connect(vpsId);
+      const ssh = await connect(vpsId, userId);
       return await ssh.execCommand(command);
     }
     throw e;
   }
 }
 
-// 强制建新连接执行（用于耗时长的命令，避免复用已断的旧连接）
-async function freshExec(vpsId, command) {
-  disconnect(vpsId);
+async function freshExec(vpsId, command, userId = null) {
+  disconnect(vpsId, userId);
   await new Promise(r => setTimeout(r, 500));
-  const ssh = await connect(vpsId);
+  const ssh = await connect(vpsId, userId);
   return await ssh.execCommand(command);
 }
 
-function disconnect(vpsId) {
-  if (pool.has(vpsId)) {
-    try { pool.get(vpsId).dispose(); } catch (_) {}
-    pool.delete(vpsId);
+function disconnect(vpsId, userId = null) {
+  const keys = userId ? [poolKey(vpsId, userId)] : [...pool.keys()].filter(key => key.endsWith(`:${vpsId}`));
+  for (const key of keys) {
+    const conn = pool.get(key);
+    if (conn) {
+      try { conn.dispose(); } catch (_) {}
+      pool.delete(key);
+    }
   }
 }
 
 async function testConnection(vpsConfig) {
   const ssh = new NodeSSH();
-  const config = {
-    host: vpsConfig.host,
-    port: parseInt(vpsConfig.port) || 22,
-    username: vpsConfig.username || 'root',
-    readyTimeout: 10000,
-  };
-  if (vpsConfig.auth_type === 'key' && vpsConfig.private_key) {
-    config.privateKey = vpsConfig.private_key;
-  } else {
-    config.password = vpsConfig.password;
-  }
-  await ssh.connect(config);
+  await ssh.connect({ ...buildConfig(vpsConfig), readyTimeout: 10000 });
   const result = await ssh.execCommand('echo ok');
   ssh.dispose();
   return result.stdout.trim() === 'ok';

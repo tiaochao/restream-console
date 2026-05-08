@@ -1,7 +1,11 @@
-const express = require('express');
+﻿const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { ensureDefaultSettings, hashPassword, verifyPassword, getGlobalSetting } = require('../db');
+
+const loginAttempts = new Map();
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 8;
 
 function allowRegistration() {
   const dbSetting = getGlobalSetting('allow_registration');
@@ -10,23 +14,58 @@ function allowRegistration() {
   return process.env.ALLOW_REGISTRATION === 'true' || count === 0;
 }
 
-router.get('/login', (req, res) => {
-  if (req.session.authenticated) return res.redirect('/dashboard');
-  res.render('login', {
+function loginKey(req, username) {
+  return `${req.ip || req.socket?.remoteAddress || 'unknown'}:${String(username || '').toLowerCase()}`;
+}
+
+function isLoginLimited(key) {
+  const now = Date.now();
+  const item = loginAttempts.get(key);
+  if (!item || item.resetAt <= now) return false;
+  return item.count >= LOGIN_MAX_ATTEMPTS;
+}
+
+function recordLoginFailure(key) {
+  const now = Date.now();
+  const item = loginAttempts.get(key);
+  if (!item || item.resetAt <= now) {
+    loginAttempts.set(key, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+  } else {
+    item.count += 1;
+  }
+}
+
+function clearLoginFailures(key) {
+  loginAttempts.delete(key);
+}
+
+function renderLogin(res, status, error) {
+  return res.status(status).render('login', {
     layout: 'layout-bare',
-    error: null,
+    error,
     allowRegistration: allowRegistration(),
   });
+}
+
+router.get('/login', (req, res) => {
+  if (req.session.authenticated) return res.redirect('/dashboard');
+  renderLogin(res, 200, null);
 });
 
 router.post('/login', (req, res) => {
   const username = (req.body.username || '').trim();
   const password = req.body.password || '';
-  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+  const key = loginKey(req, username);
 
+  if (isLoginLimited(key)) {
+    return renderLogin(res, 429, '登录失败次数过多，请 15 分钟后再试');
+  }
+
+  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
   if (user && verifyPassword(password, user.password_hash)) {
+    clearLoginFailures(key);
     req.session.regenerate((err) => {
-      if (err) return res.status(500).render('login', { layout: 'layout-bare', error: '服务器错误', allowRegistration: allowRegistration() });
+      if (err) return renderLogin(res, 500, '服务器错误');
       req.session.authenticated = true;
       req.session.userId = user.id;
       req.session.username = user.username;
@@ -37,11 +76,8 @@ router.post('/login', (req, res) => {
     return;
   }
 
-  res.status(401).render('login', {
-    layout: 'layout-bare',
-    error: '用户名或密码错误',
-    allowRegistration: allowRegistration(),
-  });
+  recordLoginFailure(key);
+  renderLogin(res, 401, '用户名或密码错误');
 });
 
 router.get('/register', (req, res) => {

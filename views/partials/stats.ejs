@@ -1,5 +1,5 @@
 <!-- 统计卡片 + 任务表 — 用于 HTMX 轮询局部刷新 -->
-<div class="grid-4 section">
+<div class="section" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;width:100%;">
   <div class="stat-card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <span class="stat-label">VPS 在线</span>
@@ -8,7 +8,7 @@
       </span>
     </div>
     <div class="stat-value" style="color:#34d399"><%= stats.onlineVps %>/<%= stats.totalVps %></div>
-    <div style="font-size:11px;color:var(--text-3);margin-top:6px;">台服务器在线</div>
+    <div style="font-size:11px;color:var(--text-2);margin-top:6px;">台服务器在线</div>
   </div>
   <div class="stat-card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
@@ -18,7 +18,9 @@
       </span>
     </div>
     <div class="stat-value" style="color:#14b8a6"><%= stats.runningTasks %></div>
-    <div style="font-size:11px;color:var(--text-3);margin-top:6px;">个任务运行中</div>
+    <div style="font-size:11px;color:var(--text-2);margin-top:6px;">
+      个任务运行中<% if (stats.retryingTasks) { %>，<%= stats.retryingTasks %> 个重试解析<% } %>
+    </div>
   </div>
   <div class="stat-card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
@@ -28,7 +30,7 @@
       </span>
     </div>
     <div class="stat-value" style="color:<%= stats.errorTasks > 0 ? '#f87171' : 'var(--text-1)' %>"><%= stats.errorTasks %></div>
-    <div style="font-size:11px;color:var(--text-3);margin-top:6px;">个任务出错</div>
+    <div style="font-size:11px;color:var(--text-2);margin-top:6px;">个任务出错</div>
   </div>
   <div class="stat-card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
@@ -38,15 +40,15 @@
       </span>
     </div>
     <div class="stat-value"><%= stats.totalTasks %></div>
-    <div style="font-size:11px;color:var(--text-3);margin-top:6px;">个任务已创建</div>
+    <div style="font-size:11px;color:var(--text-2);margin-top:6px;">个任务已创建</div>
   </div>
 </div>
 
 <!-- 任务状态表 -->
-<div class="card">
+<div class="card" style="width:100%;">
   <div class="card-header">
     <span class="card-title">任务状态</span>
-    <span style="font-size:12px;color:var(--text-3);">每 15 秒自动刷新</span>
+    <span style="font-size:12px;color:var(--text-2);">每 15 秒自动刷新</span>
   </div>
   <div style="overflow-x:auto">
     <table class="data-table">
@@ -58,16 +60,24 @@
           <th>来源直播间</th>
           <th>密钥</th>
           <th>运行时长</th>
-          <th>备注</th>
+          <th>YouTube 端</th>
         </tr>
       </thead>
       <tbody>
         <% if (tasks.length === 0) { %>
-          <tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text-3);">暂无任务 — 前往<a href="/tasks" class="link" style="margin:0 4px;">任务管理</a>创建</td></tr>
+          <tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text-2);">暂无任务 — 前往<a href="/tasks" class="link" style="margin:0 4px;">任务管理</a>创建</td></tr>
         <% } %>
         <% tasks.forEach(function(t) {
+          function formatCount(n) {
+            const value = Number(n || 0);
+            if (!Number.isFinite(value) || value <= 0) return '--';
+            if (value >= 10000) return (value / 10000).toFixed(value >= 100000 ? 0 : 1).replace(/\.0$/, '') + '万';
+            return String(value);
+          }
           const statusCfg = {
             running:      { cls: 'badge-green',  dot: '#34d399', label: '推流中',  pulse: true },
+            source_retrying: { cls: 'badge-yellow', dot: '#fbbf24', label: '重试解析', pulse: true },
+            target_lost:  { cls: 'badge-red',    dot: '#f87171', label: '目标断流', pulse: true },
             stalled:      { cls: 'badge-yellow', dot: '#fbbf24', label: '卡死',    pulse: true },
             restarting:   { cls: 'badge-blue',   dot: '#60a5fa', label: '重启中',  pulse: true },
             waiting_live: { cls: 'badge-blue',   dot: '#60a5fa', label: '等待开播', pulse: true },
@@ -78,6 +88,16 @@
           };
           const s = statusCfg[t.status] || statusCfg.idle;
           const pText = { youtube: 'YouTube', tiktok: 'TikTok', custom: '自定义' };
+          const displayName = t.name || (t.channel_name ? '[Auto] ' + t.channel_name : '');
+          const skLabel = t.stream_key_name || t.stream_key_notes || '';
+          const ytStatus = {
+            live: '直播中',
+            upcoming: '待开播',
+            complete: '已结束',
+            missing: '找不到',
+            none: '未开播',
+            unknown: '未检测'
+          }[t.youtube_live_status] || (t.stream_key_youtube_url || t.youtube_video_id ? '未检测' : '--');
           let duration = '--';
           if (t.started_at && t.status === 'running') {
             const sec = Math.floor((Date.now() - new Date(t.started_at + 'Z').getTime()) / 1000);
@@ -98,9 +118,18 @@
                 <%= t.source_url %>
               </a>
             </td>
-            <td class="text-muted monospace" style="font-size:12px;"><%= t.stream_key ? t.stream_key.substring(0,4) + '••••' : '--' %></td>
+            <td class="text-muted" style="font-size:12px;">
+              <% if (skLabel) { %>
+                <div style="font-weight:500;color:var(--text-1);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<%= skLabel %>"><%= skLabel %></div>
+                <div class="monospace text-dim" style="font-size:11px;"><%= t.stream_key ? t.stream_key.substring(0,4) + '••••' : '--' %></div>
+              <% } else { %>
+                <span class="monospace"><%= t.stream_key ? t.stream_key.substring(0,4) + '••••' : '--' %></span>
+              <% } %>
+            </td>
             <td class="text-muted monospace" style="font-size:12px;white-space:nowrap"><%= duration %></td>
-            <td class="text-dim"><%= t.notes || '--' %></td>
+            <td class="text-dim" style="white-space:nowrap;">
+              <%= ytStatus %><% if (t.youtube_live_status === 'live') { %> · <%= formatCount(t.youtube_viewers) %>人<% } %>
+            </td>
           </tr>
         <% }); %>
       </tbody>

@@ -10,9 +10,8 @@ function formatBytes(bytes) {
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
   <div>
     <h2 class="page-title">媒体库</h2>
-    <p class="page-subtitle">文件直接归属目标 VPS，可复用、可删除、可查看存储压力。</p>
+    <p class="page-subtitle">文件直接归属目标 VPS，支持分片断点续传、复用和清理。</p>
   </div>
-  <!-- VPS 选择器 + 扫描按钮 -->
   <div style="display:flex;align-items:flex-end;gap:12px;flex-shrink:0;">
     <div>
       <label class="form-label" style="margin-bottom:6px;">选择 VPS</label>
@@ -23,9 +22,8 @@ function formatBytes(bytes) {
       </select>
     </div>
     <% if (vps) { %>
-      <button onclick="scanVps()" id="scan-btn" class="btn btn-primary">
-        扫描导入 VPS 文件
-      </button>
+      <button onclick="scanVps()" id="scan-btn" class="btn btn-primary">扫描导入 VPS 文件</button>
+      <button onclick="fixNames()" id="fix-names-btn" class="btn btn-secondary" title="将乱码录播文件名重命名为 录播_日期时间_直播间_taskN.ts">修复文件名</button>
     <% } %>
   </div>
 </div>
@@ -36,22 +34,20 @@ function formatBytes(bytes) {
   </div>
 <% } else { %>
 
-<!-- 上传区域 -->
 <div class="card section">
-  <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
+  <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
     <span class="card-title">上传文件到 VPS</span>
-    <span style="font-size:12px;color:var(--text-3);">支持 mp4 / mkv / avi / ts / mov / flv / wmv / m4v / webm，单文件最大 20 GB</span>
+    <span style="font-size:12px;color:var(--text-3);">支持 mp4 / mkv / avi / ts / mov / flv / wmv / m4v / webm，单文件最大 3 GB</span>
   </div>
   <div style="padding:20px;display:flex;flex-direction:column;gap:16px;">
-    <!-- 拖拽区 -->
     <div id="drop-zone"
       style="border:2px dashed rgba(255,255,255,0.15);border-radius:12px;padding:32px;text-align:center;cursor:pointer;transition:border-color 0.2s,background 0.2s;"
       onclick="document.getElementById('file-input').click()"
       ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
       <div id="drop-idle">
         <p style="font-size:36px;margin-bottom:8px;">&#9729;&#65039;</p>
-        <p style="color:var(--text-1);font-weight:500;">点击选择文件，或将文件拖拽到此处</p>
-        <p style="color:var(--text-3);font-size:13px;margin-top:4px;">文件将通过 SFTP 直接传输到 VPS，大文件耐心等待</p>
+        <p style="color:var(--text-1);font-weight:500;">点击选择文件，或将文件拖到此处</p>
+        <p style="color:var(--text-3);font-size:13px;margin-top:4px;">按 8 MB 分片上传到目标 VPS，失败后可从已完成分片继续</p>
       </div>
       <div id="drop-file" class="hidden">
         <p style="font-size:32px;margin-bottom:8px;">&#127909;</p>
@@ -63,71 +59,60 @@ function formatBytes(bytes) {
       accept=".mp4,.mkv,.avi,.ts,.mov,.flv,.wmv,.m4v,.webm"
       onchange="onFileSelect(this.files[0])">
 
-    <!-- 进度条 -->
     <div id="upload-progress-wrap" class="hidden" style="display:none;flex-direction:column;gap:8px;">
       <div style="display:flex;align-items:center;justify-content:space-between;font-size:13px;">
         <span id="upload-status-text" style="color:var(--text-2);">准备上传…</span>
         <span id="upload-pct" class="monospace" style="color:var(--text-3);">0%</span>
       </div>
       <div style="width:100%;height:6px;background:rgba(255,255,255,0.08);border-radius:99px;overflow:hidden;">
-        <div id="upload-bar" style="height:6px;background:#818cf8;border-radius:99px;transition:width 0.2s;width:0%;"></div>
+        <div id="upload-bar" style="height:6px;background:#14b8a6;border-radius:99px;transition:width 0.2s;width:0%;"></div>
       </div>
       <p id="upload-speed" style="font-size:12px;color:var(--text-3);"></p>
     </div>
 
-    <!-- 上传按钮 -->
-    <div style="display:flex;align-items:center;gap:12px;">
-      <button id="upload-btn" onclick="startUpload()" disabled class="btn btn-primary"
-        style="opacity:0.4;cursor:not-allowed;" id="upload-btn">
-        开始上传
-      </button>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <button id="upload-btn" onclick="startUpload()" disabled class="btn btn-primary" style="opacity:0.4;cursor:not-allowed;">开始上传</button>
       <button id="upload-cancel-btn" class="hidden btn btn-secondary" onclick="cancelUpload()">取消</button>
       <span id="upload-result" style="font-size:13px;"></span>
     </div>
   </div>
 </div>
 
-<!-- SFTP 提示 -->
 <div class="alert alert-info section">
-  大文件（数 GB）也可直接用 Termius / SFTP 上传到目标 VPS 的
-  <code class="monospace" style="background:rgba(129,140,248,0.1);padding:2px 6px;border-radius:4px;font-size:12px;"><%= UPLOAD_DIR %>/</code>
-  ，然后点「扫描导入 VPS 文件」纳入媒体库。
+  超过 3 GB 的文件建议用 Termius / SFTP 直接上传到
+  <code class="monospace" style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;font-size:12px;"><%= UPLOAD_DIR %>/</code>
+  ，然后点击“扫描导入 VPS 文件”。
 </div>
 
-<!-- 统计卡 -->
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;" class="section">
   <div class="card" style="padding:16px;">
-    <p style="font-size:12px;color:var(--text-3);margin-bottom:4px;">当前 VPS</p>
+    <p style="font-size:12px;color:var(--text-2);margin-bottom:4px;">当前 VPS</p>
     <p style="font-size:16px;font-weight:700;color:var(--text-1);"><%= vps.name %></p>
-    <p style="font-size:12px;color:var(--text-3);margin-top:4px;"><%= vps.host %></p>
+    <p style="font-size:12px;color:var(--text-2);margin-top:4px;"><%= vps.host %></p>
   </div>
   <div class="card" style="padding:16px;">
-    <p style="font-size:12px;color:var(--text-3);margin-bottom:4px;">媒体文件数</p>
+    <p style="font-size:12px;color:var(--text-2);margin-bottom:4px;">媒体文件数</p>
     <p style="font-size:24px;font-weight:700;color:var(--text-1);"><%= files.length %></p>
-    <p style="font-size:12px;color:var(--text-3);margin-top:4px;">可直接复用</p>
+    <p style="font-size:12px;color:var(--text-2);margin-top:4px;">可直接复用</p>
   </div>
   <div class="card" style="padding:16px;">
-    <p style="font-size:12px;color:var(--text-3);margin-bottom:4px;">媒体库占用</p>
+    <p style="font-size:12px;color:var(--text-2);margin-bottom:4px;">媒体库占用</p>
     <p style="font-size:24px;font-weight:700;color:#f59e0b;"><%= formatBytes(totalSize) %></p>
-    <p style="font-size:12px;color:var(--text-3);margin-top:4px;">仅统计已登记媒体库文件</p>
+    <p style="font-size:12px;color:var(--text-2);margin-top:4px;">仅统计已登记文件</p>
   </div>
   <div class="card" style="padding:16px;">
-    <p style="font-size:12px;color:var(--text-3);margin-bottom:4px;">VPS 根盘占用</p>
+    <p style="font-size:12px;color:var(--text-2);margin-bottom:4px;">VPS 根盘占用</p>
     <p style="font-size:24px;font-weight:700;" id="disk-pct">--</p>
-    <p style="font-size:12px;color:var(--text-3);margin-top:4px;" id="disk-avail">加载中…</p>
+    <p style="font-size:12px;color:var(--text-2);margin-top:4px;" id="disk-avail">加载中…</p>
   </div>
 </div>
 
-<!-- 存储压力提示 -->
-<div id="storage-status" class="alert alert-info section">
-  正在获取磁盘信息…
-</div>
+<div id="storage-status" class="alert alert-info section">正在获取磁盘信息…</div>
 
-<!-- 文件列表 -->
 <div class="card section">
   <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
     <span class="card-title">文件列表</span>
-    <span style="font-size:12px;color:var(--text-3);">上传目录：<span class="monospace"><%= UPLOAD_DIR %></span></span>
+    <span style="font-size:12px;color:var(--text-2);">上传目录：<span class="monospace"><%= UPLOAD_DIR %></span></span>
   </div>
   <div style="overflow-x:auto;">
     <table class="data-table">
@@ -145,21 +130,16 @@ function formatBytes(bytes) {
         <% if (files.length === 0) { %>
           <tr>
             <td colspan="6" style="text-align:center;padding:40px;color:var(--text-3);">
-              当前 VPS 还没有媒体文件。用 SFTP 上传到
-              <code class="monospace" style="font-size:12px;"><%= UPLOAD_DIR %></code>
-              ，然后点「扫描导入 VPS 文件」。
+              当前 VPS 还没有媒体文件。上传文件或扫描 <code class="monospace" style="font-size:12px;"><%= UPLOAD_DIR %></code>。
             </td>
           </tr>
         <% } %>
         <% files.forEach(function(f) { %>
           <tr>
             <td style="max-width:220px;">
-              <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;color:var(--text-1);"
-                title="<%= f.name %>"><%= f.name %></span>
+              <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;color:var(--text-1);" title="<%= f.name %>"><%= f.name %></span>
             </td>
-            <td class="monospace" style="font-size:13px;color:var(--text-2);white-space:nowrap;">
-              <%= formatBytes(f.size) %>
-            </td>
+            <td class="monospace" style="font-size:13px;color:var(--text-2);white-space:nowrap;"><%= formatBytes(f.size) %></td>
             <td><span class="badge badge-green">已登记</span></td>
             <td>
               <% if (f.ref_count > 0) { %>
@@ -169,12 +149,10 @@ function formatBytes(bytes) {
               <% } %>
             </td>
             <td style="max-width:200px;">
-              <span class="monospace" style="font-size:12px;color:var(--text-3);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-                title="<%= f.remote_path %>"><%= f.remote_path %></span>
+              <span class="monospace" style="font-size:12px;color:var(--text-3);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<%= f.remote_path %>"><%= f.remote_path %></span>
             </td>
             <td>
-              <form method="POST" action="/media/<%= f.id %>/delete" style="margin:0;"
-                onsubmit="return confirm('确认删除「<%= f.name %>」？此操作将同时删除 VPS 上的文件。')">
+              <form method="POST" action="/media/<%= f.id %>/delete" style="margin:0;" onsubmit="return confirm('确认删除「<%= f.name %>」？会同时删除 VPS 上的文件。')">
                 <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                 <button type="submit" class="btn btn-danger btn-sm">删除</button>
               </form>
@@ -190,6 +168,10 @@ function formatBytes(bytes) {
 
 <script>
 const _csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+const CHUNK_SIZE = 8 * 1024 * 1024;
+let selectedFile = null;
+let activeXhr = null;
+let uploadCancelled = false;
 
 function switchVps(id) {
   location.href = '/media?vps_id=' + id;
@@ -204,39 +186,28 @@ function formatBytes(bytes) {
 }
 
 <% if (vps) { %>
-// 异步加载磁盘信息
 async function loadDisk() {
   try {
     const r = await fetch('/media/<%= vps.id %>/disk');
     const d = await r.json();
-    if (!d.ok) {
-      document.getElementById('disk-pct').textContent = '--';
-      document.getElementById('disk-avail').textContent = '获取失败';
-      const statusEl = document.getElementById('storage-status');
-      statusEl.className = 'alert alert-warn section';
-      statusEl.textContent = '无法获取磁盘信息，请确认 VPS 连接正常';
-      return;
-    }
+    if (!d.ok) throw new Error(d.msg || '获取失败');
     const pct = d.pct;
-    const avail = formatBytes(d.avail);
     document.getElementById('disk-pct').textContent = pct + '%';
-    document.getElementById('disk-avail').textContent = '剩余 ' + avail;
-
+    document.getElementById('disk-avail').textContent = '剩余 ' + formatBytes(d.avail);
     const pctEl = document.getElementById('disk-pct');
     if (pct >= 90) pctEl.style.color = '#f87171';
     else if (pct >= 80) pctEl.style.color = '#f59e0b';
     else pctEl.style.color = '#34d399';
-
     const statusEl = document.getElementById('storage-status');
     if (pct >= 90) {
       statusEl.className = 'alert alert-error section';
-      statusEl.textContent = '磁盘使用率超过 90%，存储压力较高，请及时清理不用的文件。';
+      statusEl.textContent = '磁盘使用率超过 90%，请先清理不用的文件。';
     } else if (pct >= 80) {
       statusEl.className = 'alert alert-warn section';
-      statusEl.textContent = '磁盘使用率超过 80%，建议清理不常用的媒体文件。';
+      statusEl.textContent = '磁盘使用率超过 80%，建议定期清理媒体文件。';
     } else {
       statusEl.className = 'alert alert-success section';
-      statusEl.textContent = '当前 VPS 存储压力正常。媒体文件直接留在目标 VPS，可复用，但也要定期清理不用的文件。';
+      statusEl.textContent = '当前 VPS 存储压力正常。';
     }
   } catch (e) {
     document.getElementById('disk-pct').textContent = '--';
@@ -250,18 +221,43 @@ async function scanVps() {
   const orig = btn.textContent;
   btn.textContent = '扫描中...'; btn.disabled = true;
   try {
-    const r = await fetch('/media/<%= vps.id %>/scan', { method: 'POST' });
+    const r = await fetch('/media/<%= vps.id %>/scan', {
+      method: 'POST',
+      headers: _csrf ? { 'x-csrf-token': _csrf } : {},
+    });
     const d = await r.json();
     showToast(d.msg, d.ok ? 'success' : 'error');
-    if (d.ok && d.added > 0) setTimeout(() => location.reload(), 800);
-    else if (d.ok) setTimeout(() => location.reload(), 500);
-  } catch(e) { showToast('请求失败', 'error'); }
+    if (d.ok) setTimeout(() => location.reload(), 600);
+  } catch(e) {
+    showToast('请求失败', 'error');
+  }
   btn.textContent = orig; btn.disabled = false;
 }
 
-// ——— 文件上传 ———
-let selectedFile = null;
-let activeXhr = null;
+async function fixNames() {
+  const btn = document.getElementById('fix-names-btn');
+  const orig = btn.textContent;
+  btn.textContent = '修复中...'; btn.disabled = true;
+  try {
+    const r = await fetch('/media/<%= vps.id %>/fix-names', {
+      method: 'POST',
+      headers: _csrf ? { 'x-csrf-token': _csrf } : {},
+    });
+    const d = await r.json();
+    showToast(d.msg, d.ok ? 'success' : 'error');
+    if (d.ok && d.renamed > 0) setTimeout(() => location.reload(), 800);
+  } catch(e) {
+    showToast('请求失败', 'error');
+  }
+  btn.textContent = orig; btn.disabled = false;
+}
+
+function setUploadButtonEnabled(enabled) {
+  const btn = document.getElementById('upload-btn');
+  btn.disabled = !enabled;
+  btn.style.opacity = enabled ? '1' : '0.4';
+  btn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+}
 
 function onFileSelect(file) {
   if (!file) return;
@@ -270,28 +266,25 @@ function onFileSelect(file) {
   document.getElementById('drop-file').classList.remove('hidden');
   document.getElementById('drop-filename').textContent = file.name;
   document.getElementById('drop-filesize').textContent = formatBytes(file.size);
-  const btn = document.getElementById('upload-btn');
-  btn.disabled = false;
-  btn.style.opacity = '1';
-  btn.style.cursor = 'pointer';
   document.getElementById('upload-result').textContent = '';
   resetProgress();
+  setUploadButtonEnabled(true);
 }
 
 function onDragOver(e) {
   e.preventDefault();
   const z = document.getElementById('drop-zone');
-  z.style.borderColor = '#818cf8';
-  z.style.background = 'rgba(129,140,248,0.05)';
+  z.style.borderColor = '#14b8a6';
+  z.style.background = 'rgba(20,184,166,0.06)';
 }
-function onDragLeave(e) {
+function onDragLeave() {
   const z = document.getElementById('drop-zone');
   z.style.borderColor = 'rgba(255,255,255,0.15)';
   z.style.background = '';
 }
 function onDrop(e) {
   e.preventDefault();
-  onDragLeave(e);
+  onDragLeave();
   const file = e.dataTransfer.files[0];
   if (file) onFileSelect(file);
 }
@@ -301,96 +294,177 @@ function resetProgress() {
   wrap.classList.add('hidden');
   wrap.style.display = 'none';
   document.getElementById('upload-bar').style.width = '0%';
-  document.getElementById('upload-bar').style.background = '#818cf8';
+  document.getElementById('upload-bar').style.background = '#14b8a6';
   document.getElementById('upload-pct').textContent = '0%';
   document.getElementById('upload-status-text').textContent = '准备上传…';
   document.getElementById('upload-speed').textContent = '';
 }
 
-function startUpload() {
+function xhrJson(method, url, body, headers) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    activeXhr = xhr;
+    xhr.onload = () => {
+      activeXhr = null;
+      let data = null;
+      try { data = JSON.parse(xhr.responseText || '{}'); }
+      catch (_) {
+        const text = (xhr.responseText || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
+        reject(new Error(`响应解析失败（HTTP ${xhr.status || 0}）${text ? '：' + text : ''}`));
+        return;
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && data.ok !== false) resolve(data);
+      else reject(new Error(data.msg || `HTTP ${xhr.status}`));
+    };
+    xhr.onerror = () => { activeXhr = null; reject(new Error('网络错误')); };
+    xhr.onabort = () => { activeXhr = null; reject(new Error('已取消')); };
+    xhr.open(method, url);
+    if (_csrf) xhr.setRequestHeader('x-csrf-token', _csrf);
+    if (headers) Object.entries(headers).forEach(([k, v]) => xhr.setRequestHeader(k, v));
+    xhr.send(body);
+  });
+}
+
+function uploadChunk(vpsId, session, index, chunk, fileSize, uploadedBytesBefore, startedAt) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append('chunk', chunk, session.name + '.part');
+    const xhr = new XMLHttpRequest();
+    activeXhr = xhr;
+    xhr.timeout = 180000;
+    xhr.upload.onprogress = (e) => {
+      const chunkLoaded = e.lengthComputable ? e.loaded : 0;
+      const loaded = uploadedBytesBefore + chunkLoaded;
+      const pct = Math.min(100, Math.floor(loaded / fileSize * 100));
+      const elapsed = (Date.now() - startedAt) / 1000;
+      const speed = elapsed > 0 ? loaded / elapsed : 0;
+      document.getElementById('upload-bar').style.width = pct + '%';
+      document.getElementById('upload-pct').textContent = pct + '%';
+      document.getElementById('upload-status-text').textContent = `正在上传第 ${index + 1}/${session.totalChunks} 片…`;
+      document.getElementById('upload-speed').textContent = speed > 0 ? `速度：${formatBytes(speed)}/s` : '';
+    };
+    xhr.upload.onload = () => {
+      document.getElementById('upload-status-text').textContent = `第 ${index + 1}/${session.totalChunks} 片已发送，等待 VPS 写入确认…`;
+    };
+    xhr.onload = () => {
+      activeXhr = null;
+      let data = null;
+      try { data = JSON.parse(xhr.responseText || '{}'); }
+      catch (_) { reject(new Error(`分片 ${index + 1} 响应解析失败`)); return; }
+      if (xhr.status >= 200 && xhr.status < 300 && data.ok) resolve(data);
+      else reject(new Error(data?.msg || `分片 ${index + 1} 上传失败`));
+    };
+    xhr.onerror = () => { activeXhr = null; reject(new Error(`分片 ${index + 1} 网络错误`)); };
+    xhr.ontimeout = () => { activeXhr = null; reject(new Error(`分片 ${index + 1} 等待 VPS 写入超时`)); };
+    xhr.onabort = () => { activeXhr = null; reject(new Error('已取消')); };
+    xhr.open('POST', `/media/${vpsId}/upload-chunk?uploadId=${encodeURIComponent(session.uploadId)}&index=${index}`);
+    if (_csrf) xhr.setRequestHeader('x-csrf-token', _csrf);
+    xhr.send(form);
+  });
+}
+
+async function retryUploadChunk(vpsId, session, index, chunk, fileSize, uploadedBytesBefore, startedAt) {
+  let lastErr;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    if (uploadCancelled) throw new Error('已取消');
+    try {
+      return await uploadChunk(vpsId, session, index, chunk, fileSize, uploadedBytesBefore, startedAt);
+    } catch (e) {
+      lastErr = e;
+      if (uploadCancelled || /已取消/.test(e.message)) throw e;
+      document.getElementById('upload-status-text').textContent = `第 ${index + 1} 片失败，正在重试 ${attempt}/3…`;
+      await new Promise(r => setTimeout(r, 800 * attempt));
+    }
+  }
+  throw lastErr;
+}
+
+async function startUpload() {
   if (!selectedFile) return;
   const vpsId = '<%= vps.id %>';
+  if (selectedFile.size > 3 * 1024 * 1024 * 1024) {
+    showToast('文件超过 3 GB，请用 SFTP 上传后扫描目录', 'error');
+    return;
+  }
 
-  const formData = new FormData();
-  formData.append('file', selectedFile);
-
-  const btn = document.getElementById('upload-btn');
-  btn.disabled = true;
-  btn.style.opacity = '0.4';
-  btn.style.cursor = 'not-allowed';
-
+  uploadCancelled = false;
+  setUploadButtonEnabled(false);
   document.getElementById('upload-cancel-btn').classList.remove('hidden');
   const wrap = document.getElementById('upload-progress-wrap');
   wrap.classList.remove('hidden');
   wrap.style.display = 'flex';
-  document.getElementById('upload-result').textContent = '';
+  const resultEl = document.getElementById('upload-result');
+  resultEl.textContent = '';
+  resultEl.style.color = '';
+  document.getElementById('upload-bar').style.background = '#14b8a6';
 
-  const xhr = new XMLHttpRequest();
-  activeXhr = xhr;
-  let startTime = Date.now();
+  try {
+    document.getElementById('upload-status-text').textContent = '正在创建分片上传会话…';
+    const session = await xhrJson('POST', `/media/${vpsId}/upload-session`, JSON.stringify({
+      name: selectedFile.name,
+      size: selectedFile.size,
+      lastModified: String(selectedFile.lastModified || ''),
+      chunkSize: CHUNK_SIZE,
+    }), { 'Content-Type': 'application/json' });
 
-  xhr.upload.onprogress = (e) => {
-    if (!e.lengthComputable) return;
-    const pct = Math.round(e.loaded / e.total * 100);
-    const elapsed = (Date.now() - startTime) / 1000;
-    const speed = elapsed > 0 ? e.loaded / elapsed : 0;
-    document.getElementById('upload-bar').style.width = pct + '%';
-    document.getElementById('upload-pct').textContent = pct + '%';
-    document.getElementById('upload-status-text').textContent = pct < 100 ? '上传到本地服务器…' : '正在 SFTP 传输到 VPS，请耐心等待…';
-    document.getElementById('upload-speed').textContent = speed > 0 ? `速度：${formatBytes(speed)}/s` : '';
-  };
-
-  xhr.onload = () => {
-    activeXhr = null;
-    document.getElementById('upload-cancel-btn').classList.add('hidden');
-    try {
-      const d = JSON.parse(xhr.responseText);
-      const resultEl = document.getElementById('upload-result');
-      if (d.ok) {
-        resultEl.style.color = '#34d399';
-        resultEl.textContent = '已完成：' + d.msg;
-        document.getElementById('upload-status-text').textContent = '传输完成';
-        document.getElementById('upload-bar').style.background = '#34d399';
-        showToast(d.msg, 'success');
-        setTimeout(() => location.reload(), 1200);
-      } else {
-        resultEl.style.color = '#f87171';
-        resultEl.textContent = '失败：' + d.msg;
-        document.getElementById('upload-status-text').textContent = '上传失败';
-        document.getElementById('upload-bar').style.background = '#f87171';
-        const b = document.getElementById('upload-btn');
-        b.disabled = false;
-        b.style.opacity = '1';
-        b.style.cursor = 'pointer';
-      }
-    } catch(e) {
-      document.getElementById('upload-result').textContent = '响应解析失败';
+    const uploaded = new Set(session.uploaded || []);
+    let uploadedBytes = 0;
+    for (let i = 0; i < session.totalChunks; i++) {
+      const start = i * session.chunkSize;
+      const end = Math.min(selectedFile.size, start + session.chunkSize);
+      if (uploaded.has(i)) uploadedBytes += end - start;
     }
-  };
+    if (uploadedBytes > 0) {
+      const pct = Math.floor(uploadedBytes / selectedFile.size * 100);
+      document.getElementById('upload-bar').style.width = pct + '%';
+      document.getElementById('upload-pct').textContent = pct + '%';
+      document.getElementById('upload-status-text').textContent = `已恢复 ${uploaded.size} 个分片，继续上传…`;
+    }
 
-  xhr.onerror = () => {
-    activeXhr = null;
+    const startedAt = Date.now();
+    for (let i = 0; i < session.totalChunks; i++) {
+      if (uploaded.has(i)) continue;
+      if (uploadCancelled) throw new Error('已取消');
+      const start = i * session.chunkSize;
+      const end = Math.min(selectedFile.size, start + session.chunkSize);
+      const chunk = selectedFile.slice(start, end);
+      await retryUploadChunk(vpsId, session, i, chunk, selectedFile.size, uploadedBytes, startedAt);
+      uploadedBytes += chunk.size;
+    }
+
+    document.getElementById('upload-status-text').textContent = '分片上传完成，正在合并 VPS 文件…';
+    const done = await xhrJson('POST', `/media/${vpsId}/upload-complete`, JSON.stringify({
+      uploadId: session.uploadId,
+      name: selectedFile.name,
+      size: selectedFile.size,
+      lastModified: String(selectedFile.lastModified || ''),
+      chunkSize: session.chunkSize,
+    }), { 'Content-Type': 'application/json' });
+
     document.getElementById('upload-cancel-btn').classList.add('hidden');
-    const resultEl = document.getElementById('upload-result');
+    resultEl.style.color = '#34d399';
+    resultEl.textContent = '已完成：' + done.msg;
+    document.getElementById('upload-status-text').textContent = '上传完成';
+    document.getElementById('upload-bar').style.width = '100%';
+    document.getElementById('upload-pct').textContent = '100%';
+    document.getElementById('upload-bar').style.background = '#34d399';
+    showToast(done.msg, 'success');
+    setTimeout(() => location.reload(), 1200);
+  } catch (e) {
+    document.getElementById('upload-cancel-btn').classList.add('hidden');
     resultEl.style.color = '#f87171';
-    resultEl.textContent = '网络错误';
-    const b = document.getElementById('upload-btn');
-    b.disabled = false;
-    b.style.opacity = '1';
-    b.style.cursor = 'pointer';
-  };
-
-  xhr.open('POST', `/media/${vpsId}/upload`);
-  xhr.send(formData);
+    resultEl.textContent = (uploadCancelled || /已取消/.test(e.message)) ? '已取消' : '失败：' + e.message;
+    document.getElementById('upload-status-text').textContent = (uploadCancelled || /已取消/.test(e.message)) ? '已取消' : '上传失败';
+    document.getElementById('upload-bar').style.background = '#f87171';
+    setUploadButtonEnabled(true);
+  }
 }
 
 function cancelUpload() {
+  uploadCancelled = true;
   if (activeXhr) { activeXhr.abort(); activeXhr = null; }
   document.getElementById('upload-cancel-btn').classList.add('hidden');
-  const b = document.getElementById('upload-btn');
-  b.disabled = false;
-  b.style.opacity = '1';
-  b.style.cursor = 'pointer';
+  setUploadButtonEnabled(true);
   document.getElementById('upload-status-text').textContent = '已取消';
 }
 <% } %>

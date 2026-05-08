@@ -28,7 +28,7 @@
       <button type="submit" class="btn <%= allowRegistration ? 'btn-secondary' : 'btn-primary' %>">
         <%= allowRegistration ? '关闭注册' : '开启注册' %>
       </button>
-      <span style="font-size:12px;color:var(--text-3);">
+      <span style="font-size:12px;color:var(--text-2);">
         <% if (allowRegistration) { %>
           开启时，任何人都可通过 <a href="/register" class="link">/register</a> 注册账号
         <% } else { %>
@@ -60,14 +60,14 @@
       </thead>
       <tbody>
         <% if (users.length === 0) { %>
-          <tr><td colspan="4" style="text-align:center;padding:32px;color:var(--text-3);">暂无用户</td></tr>
+          <tr><td colspan="4" style="text-align:center;padding:32px;color:var(--text-2);">暂无用户</td></tr>
         <% } %>
         <% users.forEach(function(u) { %>
           <tr>
             <td>
               <span style="font-weight:500;color:var(--text-1);"><%= u.username %></span>
               <% if (u.id === currentUser.id) { %>
-                <span style="margin-left:6px;font-size:12px;color:var(--text-3);">（你）</span>
+                <span style="margin-left:6px;font-size:12px;color:var(--text-2);">（你）</span>
               <% } %>
             </td>
             <td>
@@ -75,7 +75,7 @@
                 <%= u.role === 'admin' ? '管理员' : '普通用户' %>
               </span>
             </td>
-            <td style="font-size:12px;color:var(--text-3);">
+            <td style="font-size:12px;color:var(--text-2);">
               <%= u.created_at ? new Date(u.created_at + (u.created_at.endsWith('Z') ? '' : 'Z')).toLocaleString('zh-CN') : '--' %>
             </td>
             <td>
@@ -97,7 +97,7 @@
                   </form>
                 </div>
               <% } else { %>
-                <span style="color:var(--text-3);font-size:13px;">—</span>
+                <span style="color:var(--text-2);font-size:13px;">—</span>
               <% } %>
             </td>
           </tr>
@@ -124,7 +124,7 @@
         </div>
         <div>
           <label class="form-label">初始密码 *</label>
-          <input name="password" type="password" required minlength="6" placeholder="至少 6 位"
+          <input name="password" type="password" required minlength="8" placeholder="至少 8 位"
             class="form-input">
         </div>
         <div>

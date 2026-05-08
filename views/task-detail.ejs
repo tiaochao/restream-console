@@ -34,7 +34,13 @@
   <div class="modal-body">
     <div style="display:grid;grid-template-columns:120px 1fr;gap:8px 16px;font-size:14px;">
       <span style="color:var(--text-2);">状态</span><span><%= task.status %></span>
-      <span style="color:var(--text-2);">VPS</span><span><%= task.vps_name || '--' %></span>
+      <span style="color:var(--text-2);">VPS</span>
+          <span>
+            <%= task.vps_name || '--' %>
+            <% if (schedulerAssigned && task.vps_name) { %>
+              <span style="font-size:11px;color:var(--text-2);margin-left:4px;">（调度器分配）</span>
+            <% } %>
+          </span>
       <span style="color:var(--text-2);">平台</span><span><%= task.platform || '--' %></span>
       <span style="color:var(--text-2);">来源</span><span class="monospace" style="font-size:12px;word-break:break-all;"><%= task.source_url %></span>
       <span style="color:var(--text-2);">启动时间</span><span><%= task.started_at || '--' %></span>

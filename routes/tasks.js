@@ -170,12 +170,16 @@ router.get('/:id(\\d+)', (req, res) => {
     LIMIT 50
   `).all(taskId);
 
+  // [FEAT-01] 检测该任务是否曾由调度器分配（用于详情页标注）
+  const schedulerAssigned = recentEvents.some(ev => ev.reason && ev.reason.startsWith('scheduler:'));
+
   res.render('task-detail', {
     title: `任务详情 — ${task.name || task.id}`,
     currentPath: '/tasks',
     task,
     stats: statRow || { stall_count: 0, restart_count: 0, error_count: 0, recovered_count: 0 },
     recentEvents,
+    schedulerAssigned,
   });
 });
 

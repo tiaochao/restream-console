@@ -140,7 +140,7 @@
         <div>
           <label class="form-label">默认 VPS</label>
           <select id="edit-default-vps-id" class="form-select">
-            <option value="">-- 不绑定 --</option>
+            <option value="">自动（调度器分配）</option>
             <% vpsList.forEach(function(v) { %>
               <option value="<%= v.id %>"><%= v.name %></option>
             <% }); %>
@@ -213,7 +213,7 @@
         <div>
           <label class="form-label">默认 VPS</label>
           <select name="default_vps_id" class="form-select">
-            <option value="">-- 不绑定 --</option>
+            <option value="">自动（调度器分配）</option>
             <% vpsList.forEach(function(v) { %>
               <option value="<%= v.id %>"><%= v.name %></option>
             <% }); %>

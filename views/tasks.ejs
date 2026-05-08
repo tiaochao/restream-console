@@ -130,7 +130,13 @@ function youtubeStatusCfg(t) {
                 </span>
               </td>
               <td style="font-weight:500;"><%= taskDisplayName(t) %></td>
-              <td style="color:var(--text-2);"><%= t.vps_name || '<span style="color:var(--text-2)">未绑定</span>' %></td>
+              <td style="color:var(--text-2);">
+                <% if (t.vps_name) { %>
+                  <%= t.vps_name %>
+                <% } else { %>
+                  <span style="color:var(--text-2);font-style:italic;">自动分配</span>
+                <% } %>
+              </td>
               <td style="color:var(--text-2);"><%= pText[t.platform] || t.platform %></td>
               <td>
                 <a href="<%= t.source_url %>" target="_blank" class="link truncate-url" title="<%= t.source_url %>">
@@ -214,7 +220,7 @@ function youtubeStatusCfg(t) {
         <div>
           <label class="form-label">执行 VPS</label>
           <select name="vps_id" id="task-vps-select" onchange="loadMediaFiles(this.value)" class="form-select">
-            <option value="">— 选择 VPS —</option>
+            <option value="">自动选择（负载最低）</option>
             <% vpsList.forEach(function(v) { %>
               <option value="<%= v.id %>"><%= v.name %></option>
             <% }); %>

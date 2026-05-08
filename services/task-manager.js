@@ -15,6 +15,25 @@ const MEDIA_LIBRARY_DIR = '/root/restream_uploads';
 const LEGACY_RECORD_DIR = '/root/restream_recordings';
 const AUTO_RECORDING_PREFIX = '录播';
 
+const START_TASK_TIMEOUT_MS = 30 * 1000; // SSH 无响应时的最大等待时间
+
+// 返回一个在 signal 触发 abort 时 reject 的 Promise
+// 用于与业务 Promise 竞争，实现强制超时
+function raceAbort(promise, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error(`[队列启动] 操作已超时`));
+      return;
+    }
+    const onAbort = () => reject(new Error(`[队列启动] 操作超时（30s），SSH 无响应`));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (val) => { signal.removeEventListener('abort', onAbort); resolve(val); },
+      (err) => { signal.removeEventListener('abort', onAbort); reject(err); }
+    );
+  });
+}
+
 let startQueue = Promise.resolve();
 
 // Escape a string for use inside a double-quoted shell argument.
@@ -544,8 +563,9 @@ async function startTask(taskId, userId = null) {
 // 带错开延迟的启动（多任务连续启动时调用此方法）
 function startTaskQueued(taskId, userId = null) {
   startQueue = startQueue.then(async () => {
+    const signal = AbortSignal.timeout(START_TASK_TIMEOUT_MS);
     try {
-      await startTask(taskId, userId);
+      await raceAbort(startTask(taskId, userId), signal);
     } catch (e) {
       console.error(`[队列启动] 任务 ${taskId} 失败:`, e.message);
       // 启动失败时标记为 error，避免永远卡在 restarting

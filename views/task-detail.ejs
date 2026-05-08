@@ -1,0 +1,86 @@
+<div class="page-header">
+  <div>
+    <div class="page-title"><%= task.name || ('任务 #' + task.id) %></div>
+    <div class="page-subtitle">
+      <a href="/tasks" class="link">任务管理</a> / 详情
+    </div>
+  </div>
+  <a href="/tasks" class="btn btn-secondary">返回列表</a>
+</div>
+
+<!-- 统计卡片 -->
+<div class="section" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px;">
+  <div class="stat-card">
+    <div class="stat-label" style="margin-bottom:8px;">掉线次数（近30天）</div>
+    <div class="stat-value" style="color:<%= stats.stall_count > 0 ? '#fbbf24' : 'var(--text-1)' %>"><%= stats.stall_count %></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label" style="margin-bottom:8px;">自动重启（近30天）</div>
+    <div class="stat-value" style="color:<%= stats.restart_count > 0 ? '#60a5fa' : 'var(--text-1)' %>"><%= stats.restart_count %></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label" style="margin-bottom:8px;">进入错误（近30天）</div>
+    <div class="stat-value" style="color:<%= stats.error_count > 0 ? '#f87171' : 'var(--text-1)' %>"><%= stats.error_count %></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label" style="margin-bottom:8px;">成功恢复（近30天）</div>
+    <div class="stat-value" style="color:<%= stats.recovered_count > 0 ? '#34d399' : 'var(--text-1)' %>"><%= stats.recovered_count %></div>
+  </div>
+</div>
+
+<!-- 任务基本信息 -->
+<div class="card" style="margin-bottom:24px;">
+  <div class="card-header"><div class="card-title">基本信息</div></div>
+  <div class="modal-body">
+    <div style="display:grid;grid-template-columns:120px 1fr;gap:8px 16px;font-size:14px;">
+      <span style="color:var(--text-2);">状态</span><span><%= task.status %></span>
+      <span style="color:var(--text-2);">VPS</span><span><%= task.vps_name || '--' %></span>
+      <span style="color:var(--text-2);">平台</span><span><%= task.platform || '--' %></span>
+      <span style="color:var(--text-2);">来源</span><span class="monospace" style="font-size:12px;word-break:break-all;"><%= task.source_url %></span>
+      <span style="color:var(--text-2);">启动时间</span><span><%= task.started_at || '--' %></span>
+      <span style="color:var(--text-2);">最后活跃</span><span><%= task.last_active_at || '--' %></span>
+      <span style="color:var(--text-2);">自动重启</span><span><%= task.auto_restart ? '已启用' : '关闭' %></span>
+    </div>
+  </div>
+</div>
+
+<!-- 事件历史 -->
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">状态历史（最近 50 条）</div>
+    <span style="font-size:12px;color:var(--text-2);">近 30 天统计</span>
+  </div>
+  <div style="overflow-x:auto">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>从</th>
+          <th>到</th>
+          <th>原因</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (recentEvents.length === 0) { %>
+          <tr><td colspan="4" style="text-align:center;padding:32px;color:var(--text-2);">暂无事件记录（任务运行后自动记录状态变更）</td></tr>
+        <% } %>
+        <% recentEvents.forEach(function(ev) { %>
+          <%
+            const sc = {
+              running: '#34d399', stalled: '#fbbf24', restarting: '#60a5fa',
+              error: '#f87171', source_retrying: '#fbbf24'
+            };
+          %>
+          <tr>
+            <td class="text-muted monospace" style="font-size:12px;white-space:nowrap"><%= ev.created_at %></td>
+            <td class="text-muted" style="font-size:12px;"><%= ev.from_status || '--' %></td>
+            <td style="font-size:12px;">
+              <span style="color:<%= sc[ev.to_status] || 'var(--text-1)' %>"><%= ev.to_status %></span>
+            </td>
+            <td class="text-muted" style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<%= ev.reason || '' %>"><%= ev.reason || '--' %></td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
+  </div>
+</div>

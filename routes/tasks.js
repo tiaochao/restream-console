@@ -138,6 +138,47 @@ function findDefaultVpsForStreamKey(userId, rtmpUrl, streamKey) {
 
 router.get('/', (req, res) => renderTasks(res, req, 200));
 
+router.get('/:id(\\d+)', (req, res) => {
+  const taskId = parseInt(req.params.id, 10);
+
+  const task = db.prepare(`
+    SELECT t.*, v.name as vps_name
+    FROM tasks t
+    LEFT JOIN vps v ON t.vps_id = v.id
+    WHERE t.id = ? AND t.user_id = ?
+  `).get(taskId, req.session.userId);
+
+  if (!task) return res.status(404).send('任务不存在或无权访问');
+
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+
+  const statRow = db.prepare(`
+    SELECT
+      COUNT(CASE WHEN to_status='stalled' THEN 1 END) as stall_count,
+      COUNT(CASE WHEN to_status='restarting' THEN 1 END) as restart_count,
+      COUNT(CASE WHEN to_status='error' THEN 1 END) as error_count,
+      COUNT(CASE WHEN to_status='running' AND from_status IN ('stalled','restarting','source_retrying') THEN 1 END) as recovered_count
+    FROM task_events
+    WHERE task_id = ? AND created_at >= ?
+  `).get(taskId, since);
+
+  const recentEvents = db.prepare(`
+    SELECT id, from_status, to_status, reason, created_at
+    FROM task_events
+    WHERE task_id = ?
+    ORDER BY created_at DESC
+    LIMIT 50
+  `).all(taskId);
+
+  res.render('task-detail', {
+    title: `任务详情 — ${task.name || task.id}`,
+    currentPath: '/tasks',
+    task,
+    stats: statRow || { stall_count: 0, restart_count: 0, error_count: 0, recovered_count: 0 },
+    recentEvents,
+  });
+});
+
 router.post('/', async (req, res) => {
   const { name, platform, source_url, backup_urls, rtmp_url, stream_key, auto_restart, notes } = req.body;
   const vps_id = req.body.vps_id || findDefaultVpsForStreamKey(req.session.userId, rtmp_url, stream_key);

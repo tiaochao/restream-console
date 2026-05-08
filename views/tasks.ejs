@@ -90,6 +90,7 @@ function youtubeStatusCfg(t) {
             <th>时长</th>
             <th>自动重启</th>
             <th>操作</th>
+            <th></th>
           </tr>
         </thead>
         <tbody id="task-tbody">
@@ -187,6 +188,7 @@ function youtubeStatusCfg(t) {
                   </form>
                 </div>
               </td>
+              <td><a href="/tasks/<%= t.id %>" class="link" style="font-size:12px;">详情</a></td>
             </tr>
           <% }); %>
         </tbody>

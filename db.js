@@ -95,11 +95,62 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS upload_sessions (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    vps_id INTEGER NOT NULL REFERENCES vps(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    remote_path TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    chunk_size INTEGER NOT NULL,
+    total_chunks INTEGER NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    expires_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS settings (
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     key TEXT NOT NULL,
     value TEXT,
     PRIMARY KEY (user_id, key)
+  );
+
+  CREATE TABLE IF NOT EXISTS yt_channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    channel_id TEXT NOT NULL,
+    input TEXT NOT NULL,
+    title TEXT,
+    handle TEXT,
+    thumbnail_url TEXT,
+    subscriber_count INTEGER DEFAULT 0,
+    video_count INTEGER DEFAULT 0,
+    view_count INTEGER DEFAULT 0,
+    uploads_playlist_id TEXT,
+    last_synced TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_yt_channels_user_channel
+    ON yt_channels(user_id, channel_id);
+
+  CREATE TABLE IF NOT EXISTS yt_videos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    channel_id TEXT NOT NULL,
+    video_id TEXT NOT NULL,
+    title TEXT,
+    type TEXT DEFAULT 'video',
+    duration_sec INTEGER,
+    view_count INTEGER DEFAULT 0,
+    like_count INTEGER DEFAULT 0,
+    concurrent_viewers INTEGER,
+    live_start TEXT,
+    live_end TEXT,
+    published_at TEXT,
+    fetched_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(user_id, video_id)
   );
 `);
 
@@ -151,14 +202,33 @@ function migrateSettingsPrimaryKey() {
   ['tasks', 'auto_restart', 'INTEGER DEFAULT 0'],
   ['tasks', 'block_count', 'INTEGER DEFAULT 0'],
   ['tasks', 'backup_urls', 'TEXT'],
+  ['tasks', 'youtube_video_id', 'TEXT'],
+  ['tasks', 'youtube_live_status', 'TEXT'],
+  ['tasks', 'youtube_viewers', 'INTEGER'],
+  ['tasks', 'youtube_views', 'INTEGER'],
+  ['tasks', 'youtube_title', 'TEXT'],
+  ['tasks', 'youtube_last_check', 'TEXT'],
+  ['tasks', 'youtube_check_error', 'TEXT'],
+  ['stream_keys', 'default_vps_id', 'INTEGER REFERENCES vps(id) ON DELETE SET NULL'],
+  ['stream_keys', 'youtube_url', 'TEXT'],
+  ['stream_keys', 'youtube_channel_id', 'INTEGER REFERENCES yt_channels(id) ON DELETE SET NULL'],
+  ['yt_channels', 'current_live_video_id', 'TEXT'],
 ].forEach(([table, column, definition]) => {
   ensureColumn(table, column, definition);
 });
 
 const userCount = db.prepare('SELECT COUNT(*) as n FROM users').get().n;
 if (userCount === 0) {
+  const initialAdminPassword = process.env.ADMIN_PASSWORD;
+  if (process.env.NODE_ENV === 'production' && !initialAdminPassword) {
+    throw new Error('ADMIN_PASSWORD is required when creating the first admin user in production');
+  }
+  const passwordToUse = initialAdminPassword || crypto.randomBytes(18).toString('base64url');
+  if (!initialAdminPassword) {
+    console.warn(`[db] Created development admin user. Temporary password: ${passwordToUse}`);
+  }
   db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)')
-    .run('admin', hashPassword(process.env.ADMIN_PASSWORD || 'admin123'), 'admin');
+    .run('admin', hashPassword(passwordToUse), 'admin');
 }
 
 const defaultUserId = db.prepare("SELECT id FROM users WHERE username='admin'").get()?.id || 1;
@@ -169,6 +239,18 @@ migrateSettingsPrimaryKey();
   ensureColumn(table, 'user_id', 'INTEGER REFERENCES users(id) ON DELETE CASCADE');
   db.prepare(`UPDATE ${table} SET user_id=? WHERE user_id IS NULL`).run(defaultUserId);
 });
+
+db.exec(`
+  DELETE FROM source_channels
+  WHERE id NOT IN (
+    SELECT MIN(id)
+    FROM source_channels
+    GROUP BY user_id, url
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_source_channels_user_url
+  ON source_channels(user_id, url);
+`);
 
 ensureColumn('settings', 'user_id', 'INTEGER REFERENCES users(id) ON DELETE CASCADE');
 try {
@@ -181,6 +263,10 @@ const defaults = {
   max_tasks_per_vps: '5',
   block_limit: '8',
   monitor_interval: '5',
+  youtube_api_key: '',
+  youtube_api_keys: '',
+  youtube_api_key_cursor: '0',
+  youtube_api_key_status: '{}',
 };
 
 function ensureDefaultSettings(userId) {

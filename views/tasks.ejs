@@ -6,6 +6,45 @@ function formatDuration(ms) {
   const sec = String(s % 60).padStart(2, '0');
   return h + ':' + m + ':' + sec;
 }
+function taskDisplayName(t) {
+  if (t.name) return t.name;
+  if (t.channel_name) return '[Auto] ' + t.channel_name;
+  try {
+    const u = new URL(t.source_url || '');
+    const last = u.pathname.split('/').filter(Boolean).pop();
+    if (last) return '直播间 ' + last.slice(-12);
+  } catch (_) {}
+  return '--';
+}
+function streamKeyLabel(t) {
+  if (t.stream_key_name) return t.stream_key_name;
+  if (t.stream_key_notes) return t.stream_key_notes;
+  return '';
+}
+function formatCount(n) {
+  const value = Number(n || 0);
+  if (!Number.isFinite(value) || value <= 0) return '--';
+  if (value >= 10000) return (value / 10000).toFixed(value >= 100000 ? 0 : 1).replace(/\.0$/, '') + '万';
+  return String(value);
+}
+function youtubeStatusCfg(t) {
+  const hasTarget = !!(t.youtube_video_id || t.stream_key_youtube_url);
+  if (!hasTarget) return { cls: 'badge-gray', dot: '#71717a', label: '未绑定', detail: '无 YouTube 链接' };
+  if (t.youtube_check_error) return { cls: 'badge-yellow', dot: '#fbbf24', label: '检测失败', detail: t.youtube_check_error };
+  const map = {
+    live:     { cls: 'badge-green', dot: '#34d399', label: '直播中' },
+    upcoming: { cls: 'badge-blue',  dot: '#60a5fa', label: '待开播' },
+    complete: { cls: 'badge-gray',  dot: '#71717a', label: '已结束' },
+    missing:  { cls: 'badge-red',   dot: '#f87171', label: '找不到' },
+    none:     { cls: 'badge-gray',  dot: '#71717a', label: '未开播' },
+    unknown:  { cls: 'badge-yellow',dot: '#fbbf24', label: '未检测' },
+  };
+  const cfg = map[t.youtube_live_status] || map.unknown;
+  const detail = t.youtube_live_status === 'live'
+    ? `${formatCount(t.youtube_viewers)} 人在线`
+    : (t.youtube_last_check ? `上次 ${t.youtube_last_check.slice(5, 16)}` : '等待检测');
+  return { ...cfg, detail };
+}
 %>
 <div>
   <div class="page-header">
@@ -47,6 +86,7 @@ function formatDuration(ms) {
             <th>平台</th>
             <th>来源 URL</th>
             <th>推流密钥</th>
+            <th>YouTube 端</th>
             <th>时长</th>
             <th>自动重启</th>
             <th>操作</th>
@@ -54,11 +94,13 @@ function formatDuration(ms) {
         </thead>
         <tbody id="task-tbody">
           <% if (tasks.length === 0) { %>
-            <tr><td colspan="10" style="text-align:center;padding:48px;color:var(--text-3);">暂无任务，点击右上角「新建任务」</td></tr>
+            <tr><td colspan="11" style="text-align:center;padding:48px;color:var(--text-2);">暂无任务，点击右上角「新建任务」</td></tr>
           <% } %>
           <% tasks.forEach(function(t) {
             const statusCfg = {
               running:      { cls: 'badge-green',  dot: '#34d399', label: '推流中',   pulse: true },
+              source_retrying: { cls: 'badge-yellow', dot: '#fbbf24', label: '重试解析', pulse: true },
+              target_lost:  { cls: 'badge-red',    dot: '#f87171', label: '目标断流', pulse: true },
               stalled:      { cls: 'badge-yellow', dot: '#fbbf24', label: '卡死',     pulse: true },
               restarting:   { cls: 'badge-blue',   dot: '#60a5fa', label: '重启中',   pulse: true },
               waiting_live: { cls: 'badge-blue',   dot: '#60a5fa', label: '等待开播', pulse: true },
@@ -69,44 +111,64 @@ function formatDuration(ms) {
             };
             const s = statusCfg[t.status] || statusCfg.idle;
             const pText = { youtube: 'YouTube', tiktok: 'TikTok', custom: '自定义' };
-            const isRunning = ['running','stalled','restarting'].includes(t.status);
+            const isRunning = ['running','source_retrying','stalled','target_lost','restarting'].includes(t.status);
             const isWaiting = t.status === 'waiting_live';
             const duration = t.started_at && t.status === 'running'
               ? formatDuration(new Date() - new Date(t.started_at + 'Z')) : '--';
+            const yts = youtubeStatusCfg(t);
           %>
             <tr id="task-row-<%= t.id %>">
               <td style="padding:12px;">
                 <input type="checkbox" class="task-cb" value="<%= t.id %>" onchange="onCbChange()"
                   style="width:14px;height:14px;accent-color:#14b8a6;cursor:pointer;">
               </td>
-              <td>
+              <td style="min-width:92px;">
                 <span class="badge <%= s.cls %>">
                   <span class="badge-dot <%= s.pulse ? 'pulse' : '' %>" style="background:<%= s.dot %>"></span>
                   <%= s.label %>
                 </span>
               </td>
-              <td style="font-weight:500;"><%= t.name || '--' %></td>
-              <td style="color:var(--text-2);"><%= t.vps_name || '<span style="color:var(--text-3)">未绑定</span>' %></td>
+              <td style="font-weight:500;"><%= taskDisplayName(t) %></td>
+              <td style="color:var(--text-2);"><%= t.vps_name || '<span style="color:var(--text-2)">未绑定</span>' %></td>
               <td style="color:var(--text-2);"><%= pText[t.platform] || t.platform %></td>
               <td>
                 <a href="<%= t.source_url %>" target="_blank" class="link truncate-url" title="<%= t.source_url %>">
                   <%= t.source_url %>
                 </a>
               </td>
-              <td class="monospace" style="font-size:12px;color:var(--text-2);">
-                <%= t.stream_key ? t.stream_key.substring(0,4) + '••••' : '--' %>
+              <td style="font-size:12px;color:var(--text-2);">
+                <% const skLabel = streamKeyLabel(t); %>
+                <% if (skLabel) { %>
+                  <div style="font-weight:500;color:var(--text-1);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<%= skLabel %>"><%= skLabel %></div>
+                  <div class="monospace" style="font-size:11px;color:var(--text-3);"><%= t.stream_key ? t.stream_key.substring(0,4) + '••••' : '--' %></div>
+                <% } else { %>
+                  <span class="monospace"><%= t.stream_key ? t.stream_key.substring(0,4) + '••••' : '--' %></span>
+                <% } %>
+              </td>
+              <td style="font-size:12px;color:var(--text-2);min-width:116px;">
+                <div class="status-stack">
+                  <span class="badge <%= yts.cls %>" title="<%= yts.detail %>">
+                    <span class="badge-dot" style="background:<%= yts.dot %>"></span>
+                    <%= yts.label %>
+                  </span>
+                  <span class="metric-pill" title="<%= yts.detail %>"><%= yts.detail %></span>
+                  <% if (t.youtube_views) { %>
+                    <span class="metric-line">播放 <%= formatCount(t.youtube_views) %></span>
+                  <% } %>
+                </div>
               </td>
               <td class="monospace" style="font-size:12px;color:var(--text-2);white-space:nowrap"><%= duration %></td>
               <td>
                 <button onclick="toggleRestart(<%= t.id %>, this)"
                   data-state="<%= t.auto_restart ? '1' : '0' %>"
-                  style="width:36px;height:20px;border-radius:20px;border:none;cursor:pointer;position:relative;transition:background .2s;background:<%= t.auto_restart ? '#0d9488' : '#d1d5db' %>;"
+                  style="width:44px;height:22px;border-radius:12px;border:1px solid <%= t.auto_restart ? 'var(--accent)' : 'rgba(100,116,139,0.55)' %>;cursor:pointer;position:relative;transition:background .2s,border-color .2s;background:<%= t.auto_restart ? 'var(--accent)' : '#e5e7eb' %>;"
                   title="<%= t.auto_restart ? '自动重启已开启' : '已关闭' %>">
-                  <span style="position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.25);top:50%;transform:translateY(-50%) translateX(<%= t.auto_restart ? '18px' : '2px' %>);transition:transform .2s;"></span>
+                  <span class="toggle-text" style="position:absolute;font-size:10px;font-weight:600;color:<%= t.auto_restart ? '#fff' : '#64748b' %>;left:<%= t.auto_restart ? '7px' : '21px' %>;top:50%;transform:translateY(-50%);line-height:1"><%= t.auto_restart ? '开' : '关' %></span>
+                  <span class="toggle-knob" style="position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.25);top:50%;left:<%= t.auto_restart ? '25px' : '3px' %>;transform:translateY(-50%);transition:left .2s;"></span>
                 </button>
               </td>
               <td>
-                <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
+                <div class="action-row">
                   <% if (isWaiting) { %>
                     <button onclick="calibrateTask(<%= t.id %>, this)" class="btn btn-secondary btn-xs" style="color:#60a5fa;border-color:rgba(96,165,250,0.25);">校准</button>
                     <button onclick="taskAction(<%= t.id %>, 'stop', this)" class="btn btn-secondary btn-xs">取消</button>
@@ -115,10 +177,11 @@ function formatDuration(ms) {
                   <% } else { %>
                     <button onclick="taskAction(<%= t.id %>, 'start', this)" class="btn btn-secondary btn-xs" style="color:#34d399;border-color:rgba(52,211,153,0.25);">启动</button>
                   <% } %>
+                  <button onclick="checkYouTubeTask(<%= t.id %>, this)" class="btn btn-ghost btn-xs">YouTube</button>
                   <button onclick="openEditModal(<%= t.id %>)" class="btn btn-ghost btn-xs">编辑</button>
                   <a href="/logs/<%= t.id %>" class="btn btn-ghost btn-xs">日志</a>
                   <form method="POST" action="/tasks/<%= t.id %>/delete"
-                    onsubmit="return confirm('确认删除任务「<%= t.name || t.id %>」？')" style="display:inline;margin:0;">
+                    onsubmit="return confirm('确认删除任务「<%= taskDisplayName(t) || t.id %>」？')" style="display:inline;margin:0;">
                     <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                     <button type="submit" class="btn btn-danger btn-xs">删除</button>
                   </form>
@@ -144,7 +207,7 @@ function formatDuration(ms) {
       <div class="grid-2">
         <div>
           <label class="form-label">任务名称</label>
-          <input name="name" placeholder="可选，如：某直播间转YouTube" class="form-input">
+          <input name="name" id="task-name-input" placeholder="可选，如：某直播间转YouTube" class="form-input">
         </div>
         <div>
           <label class="form-label">执行 VPS</label>
@@ -156,53 +219,76 @@ function formatDuration(ms) {
           </select>
         </div>
       </div>
+      <% if (typeof sourceChannels !== 'undefined' && sourceChannels.length > 0) { %>
       <div>
-        <label class="form-label">来源直播间 URL</label>
-        <input name="source_url" id="source-url-input"
-          placeholder="https://live.douyin.com/xxx 或 https://live.bilibili.com/xxx" class="form-input">
-        <div class="form-hint">支持抖音、B站、快手、YouTube 等平台直播间 URL</div>
+        <label class="form-label">从频道监控选择</label>
+        <select id="channel-picker" onchange="applySourceChannel(this.value)" class="form-select">
+          <option value="">— 选择已保存的直播间（可选）—</option>
+          <% sourceChannels.forEach(function(ch) {
+            const platformLabel = { douyin:'抖音', bilibili:'B站', kuaishou:'快手', youtube:'YouTube', tiktok:'TikTok', custom:'其他' };
+            const statusLabel = { live:'直播中', offline:'未开播', unknown:'未检测' };
+          %>
+            <option value="<%= ch.id %>"
+              data-name="<%= ch.name %>"
+              data-url="<%= ch.url %>"
+              data-platform="<%= ch.platform %>"
+              data-vps="<%= ch.auto_vps_id || '' %>"
+              data-sk="<%= ch.auto_stream_key_id || '' %>">
+              <%= ch.name %> · <%= platformLabel[ch.platform] || ch.platform %> · <%= statusLabel[ch.live_status] || '未检测' %>
+            </option>
+          <% }); %>
+        </select>
+        <div id="channel-picked-hint" class="form-hint">选择后会自动填入直播间 URL 和任务名称；若频道已配置自动 VPS/推流码，也会同步带入。</div>
       </div>
-      <div>
-        <label class="form-label">备用源 URL <span style="font-weight:400;color:var(--text-3);">（可选，每行一个）</span></label>
-        <textarea name="backup_urls" rows="2"
-          placeholder="主源失败时依次尝试&#10;https://live.douyin.com/xxx2"
-          class="form-textarea" style="resize:none;"></textarea>
-      </div>
-      <div>
-        <label class="form-label">或从媒体库选择文件（循环推流）</label>
-        <div style="display:flex;gap:8px;">
+      <% } %>
+      <div style="padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);">
+        <label class="form-label">转播来源 *</label>
+        <div style="display:flex;gap:8px;align-items:center;">
           <select id="media-file-select" onchange="applyMediaFile(this.value)" class="form-select" style="flex:1;">
-            <option value="">— 先选择 VPS，再选择媒体文件 —</option>
+            <option value="">— 先选择 VPS，再选择或上传媒体文件 —</option>
           </select>
-          <button type="button" onclick="openQuickUpload()" class="btn btn-secondary btn-sm" title="上传新文件">
+          <button type="button" onclick="openQuickUpload()" class="btn btn-primary btn-sm" title="上传新文件到当前 VPS">
             <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
-            上传
+            上传文件
           </button>
         </div>
+        <div class="form-hint">选择或上传文件后，会自动填入 VPS 真实路径；也可以直接粘贴直播间 URL。</div>
         <!-- 快速上传面板 -->
-        <div id="quick-upload-panel" style="display:none;margin-top:10px;padding:14px;background:rgba(0,0,0,0.2);border:1px solid var(--border);border-radius:10px;">
+        <div id="quick-upload-panel" style="display:none;margin-top:10px;padding:12px;background:var(--modal-bg);border:1px solid var(--border);border-radius:8px;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
             <span style="font-size:13px;font-weight:500;color:var(--text-1);">上传文件到当前 VPS</span>
-            <button type="button" onclick="closeQuickUpload()" style="background:none;border:none;color:var(--text-3);cursor:pointer;font-size:15px;">✕</button>
+            <button type="button" onclick="closeQuickUpload()" style="background:none;border:none;color:var(--text-2);cursor:pointer;font-size:15px;">✕</button>
           </div>
           <div style="display:flex;gap:8px;align-items:center;">
             <input type="file" id="quick-file-input" accept=".mp4,.mkv,.avi,.ts,.mov,.flv,.wmv,.m4v,.webm"
               onchange="onQuickFileSelect(this)"
-              style="flex:1;font-size:12px;color:var(--text-2);">
+              style="flex:1;min-width:0;font-size:12px;color:var(--text-2);">
             <button type="button" id="quick-upload-btn" onclick="startQuickUpload()" disabled
               class="btn btn-primary btn-sm">开始上传</button>
           </div>
           <div id="quick-progress-wrap" style="display:none;margin-top:10px;">
-            <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-3);margin-bottom:5px;">
-              <span id="quick-status-text">准备上传…</span>
+            <div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--text-2);margin-bottom:5px;">
+              <span id="quick-status-text" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">准备上传…</span>
               <span id="quick-pct">0%</span>
             </div>
             <div style="height:4px;background:rgba(255,255,255,0.08);border-radius:4px;overflow:hidden;">
               <div id="quick-bar" style="height:100%;width:0%;background:#14b8a6;border-radius:4px;transition:width .2s;"></div>
             </div>
           </div>
-          <p id="quick-result" style="display:none;font-size:12px;margin-top:8px;"></p>
+          <p id="quick-result" style="display:none;font-size:12px;margin:8px 0 0;"></p>
         </div>
+      </div>
+      <div>
+        <label class="form-label">直播间 URL / VPS 文件路径</label>
+        <input name="source_url" id="source-url-input" required
+          placeholder="https://live.douyin.com/xxx 或 /root/restream_uploads/video.mp4" class="form-input">
+        <div class="form-hint">纯文件转播会循环播放这个 VPS 文件路径。</div>
+      </div>
+      <div>
+        <label class="form-label">备用源 URL <span style="font-weight:400;color:var(--text-2);">（可选，每行一个）</span></label>
+        <textarea name="backup_urls" rows="2"
+          placeholder="主源失败时依次尝试&#10;https://live.douyin.com/xxx2"
+          class="form-textarea" style="resize:none;"></textarea>
       </div>
       <% if (typeof streamKeys !== 'undefined' && streamKeys.length > 0) { %>
       <div>
@@ -210,11 +296,12 @@ function formatDuration(ms) {
         <select id="sk-picker" onchange="applyStreamKey(this.value)" class="form-select">
           <option value="">— 选择已保存的推流码（可选）—</option>
           <% streamKeys.forEach(function(k) { %>
-            <option value="<%= k.id %>" data-rtmp="<%= k.rtmp_url %>" data-key="<%= k.stream_key %>" data-platform="<%= k.platform %>">
-              [<%= k.platform %>] <%= k.name %>
+            <option value="<%= k.id %>" data-rtmp="<%= k.rtmp_url %>" data-key="<%= k.stream_key %>" data-platform="<%= k.platform %>" data-name="<%= k.name %>" data-vps="<%= k.default_vps_id || '' %>">
+              <%= k.name %> · <%= k.platform %>
             </option>
           <% }); %>
         </select>
+        <div id="sk-picked-hint" class="form-hint">选择后会自动填入 RTMP 地址和推流密钥。</div>
       </div>
       <% } %>
       <div class="grid-2">
@@ -271,7 +358,7 @@ function formatDuration(ms) {
         </div>
         <div>
           <label class="form-label">执行 VPS</label>
-          <select id="edit-vps-id" class="form-select">
+          <select id="edit-vps-id" onchange="loadEditMediaFiles(this.value, document.getElementById('edit-source-url').value)" class="form-select">
             <option value="">— 选择 VPS —</option>
             <% vpsList.forEach(function(v) { %>
               <option value="<%= v.id %>"><%= v.name %></option>
@@ -284,7 +371,14 @@ function formatDuration(ms) {
         <input id="edit-source-url" placeholder="https://live.douyin.com/xxx" class="form-input">
       </div>
       <div>
-        <label class="form-label">备用源 URL <span style="font-weight:400;color:var(--text-3);">（每行一个）</span></label>
+        <label class="form-label">或从媒体库选择文件（直接文件转播）</label>
+        <select id="edit-media-file" onchange="applyEditMediaFile(this.value)" class="form-select">
+          <option value="">— 先选择 VPS，再选择媒体文件 —</option>
+        </select>
+        <div class="form-hint">选择后会把来源改为 VPS 上的真实文件路径。</div>
+      </div>
+      <div>
+        <label class="form-label">备用源 URL <span style="font-weight:400;color:var(--text-2);">（每行一个）</span></label>
         <textarea id="edit-backup-urls" rows="3"
           placeholder="备用直播间URL，主源失败时依次尝试"
           class="form-textarea" style="resize:none;"></textarea>
@@ -317,6 +411,7 @@ function formatDuration(ms) {
 
 <script>
 const TASKS_DATA = <%- JSON.stringify(tasks).replace(/<\/script>/gi, '<\\/script>') %>;
+const SOURCE_CHANNELS = <%- JSON.stringify(typeof sourceChannels !== 'undefined' ? sourceChannels : []).replace(/<\/script>/gi, '<\\/script>') %>;
 const _csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
 
 const RTMP_MAP = {
@@ -335,15 +430,58 @@ function applyStreamKey(skId) {
   document.getElementById('stream-key-input').value = opt.dataset.key || '';
   const ps = document.getElementById('platform-select');
   if (opt.dataset.platform && ps) ps.value = opt.dataset.platform;
+  const vpsId = opt.dataset.vps || '';
+  const vpsSelect = document.getElementById('task-vps-select');
+  if (vpsId && vpsSelect && vpsSelect.querySelector('option[value="' + vpsId + '"]')) {
+    vpsSelect.value = String(vpsId);
+    loadMediaFiles(String(vpsId));
+  }
+  const hint = document.getElementById('sk-picked-hint');
+  if (hint) hint.textContent = '已选择：' + (opt.dataset.name || opt.textContent.trim());
+}
+function applySourceChannel(channelId) {
+  if (!channelId) return;
+  const opt = document.querySelector('#channel-picker option[value="' + channelId + '"]');
+  const channel = SOURCE_CHANNELS.find(ch => String(ch.id) === String(channelId));
+  if (!opt || !channel) return;
+
+  const nameInput = document.getElementById('task-name-input');
+  const sourceInput = document.getElementById('source-url-input');
+  if (sourceInput) sourceInput.value = channel.url || opt.dataset.url || '';
+  if (nameInput && !nameInput.value.trim()) nameInput.value = '[Auto] ' + (channel.name || opt.dataset.name || '');
+
+  const vpsId = channel.auto_vps_id || opt.dataset.vps || '';
+  const vpsSelect = document.getElementById('task-vps-select');
+  if (vpsId && vpsSelect && vpsSelect.querySelector('option[value="' + vpsId + '"]')) {
+    vpsSelect.value = String(vpsId);
+    loadMediaFiles(String(vpsId));
+  }
+
+  const skId = channel.auto_stream_key_id || opt.dataset.sk || '';
+  const skPicker = document.getElementById('sk-picker');
+  if (skId && skPicker && skPicker.querySelector('option[value="' + skId + '"]')) {
+    skPicker.value = String(skId);
+    applyStreamKey(String(skId));
+    if (vpsId && vpsSelect && vpsSelect.querySelector('option[value="' + vpsId + '"]')) {
+      vpsSelect.value = String(vpsId);
+      loadMediaFiles(String(vpsId));
+    }
+  }
+
+  const hint = document.getElementById('channel-picked-hint');
+  if (hint) hint.textContent = '已选择：' + (channel.name || opt.dataset.name || '') + '，直播间 URL 已填入。';
 }
 function formatDuration(ms) {
   const s = Math.floor(ms / 1000);
   return [Math.floor(s/3600), Math.floor((s%3600)/60), s%60].map(n=>String(n).padStart(2,'0')).join(':');
 }
-async function loadMediaFiles(vpsId) {
+async function loadMediaFiles(vpsId, selectedPath) {
   const sel = document.getElementById('media-file-select');
   sel.innerHTML = '<option value="">加载中…</option>';
-  if (!vpsId) { sel.innerHTML = '<option value="">— 选择媒体文件 —</option>'; return; }
+  if (!vpsId) {
+    sel.innerHTML = '<option value="">— 选择媒体文件 —</option>';
+    return;
+  }
   try {
     const r = await fetch('/media/api/list?vps_id=' + vpsId);
     const files = await r.json();
@@ -351,14 +489,47 @@ async function loadMediaFiles(vpsId) {
     files.forEach(f => {
       const opt = document.createElement('option');
       opt.value = f.remote_path;
-      opt.textContent = f.name + (f.size ? ' (' + formatBytes(f.size) + ')' : '');
+      opt.textContent = f.name + (f.size ? ' (' + formatBytes(f.size) + ')' : '') + ' — ' + f.remote_path;
+      if (selectedPath && f.remote_path === selectedPath) opt.selected = true;
       sel.appendChild(opt);
     });
     if (files.length === 0) sel.innerHTML = '<option value="">该 VPS 媒体库为空</option>';
-  } catch(e) { sel.innerHTML = '<option value="">加载失败</option>'; }
+  } catch(e) {
+    sel.innerHTML = '<option value="">加载失败</option>';
+  }
 }
 function applyMediaFile(path) {
   if (path) document.getElementById('source-url-input').value = path;
+}
+async function loadEditMediaFiles(vpsId, selectedPath) {
+  const mediaSel = document.getElementById('edit-media-file');
+  if (mediaSel) mediaSel.innerHTML = '<option value="">加载中…</option>';
+  if (!vpsId) {
+    if (mediaSel) mediaSel.innerHTML = '<option value="">— 先选择 VPS，再选择媒体文件 —</option>';
+    return;
+  }
+  try {
+    const r = await fetch('/media/api/list?vps_id=' + vpsId);
+    const files = await r.json();
+    if (mediaSel) mediaSel.innerHTML = '<option value="">— 选择媒体文件作为来源 —</option>';
+    files.forEach(f => {
+      const opt = document.createElement('option');
+      opt.value = f.remote_path;
+      opt.textContent = f.name + (f.size ? ' (' + formatBytes(f.size) + ')' : '') + ' — ' + f.remote_path;
+      if (f.remote_path === selectedPath) opt.selected = true;
+      if (mediaSel) mediaSel.appendChild(opt.cloneNode(true));
+    });
+    const currentSource = document.getElementById('edit-source-url')?.value || '';
+    if (mediaSel && currentSource.startsWith('/')) mediaSel.value = currentSource;
+    if (files.length === 0) {
+      if (mediaSel) mediaSel.innerHTML = '<option value="">该 VPS 媒体库为空</option>';
+    }
+  } catch(e) {
+    if (mediaSel) mediaSel.innerHTML = '<option value="">加载失败</option>';
+  }
+}
+function applyEditMediaFile(path) {
+  if (path) document.getElementById('edit-source-url').value = path;
 }
 function formatBytes(bytes) {
   if (!bytes) return '0B';
@@ -384,14 +555,21 @@ async function toggleRestart(id, btn) {
   try {
     const r = await fetch('/tasks/' + id + '/toggle-restart', { method: 'POST' });
     const d = await r.json();
-    if (d.ok) {
-      const on = d.auto_restart === 1;
-      btn.style.background = on ? '#0d9488' : '#d1d5db';
-      btn.querySelector('span').style.background = '#fff';
-      btn.querySelector('span').style.transform = 'translateY(-50%) translateX(' + (on ? '18px' : '2px') + ')';
-      btn.title = on ? '自动重启已开启' : '已关闭';
-      showToast(on ? '已开启自动重启' : '已关闭自动重启', 'info');
-    }
+      if (d.ok) {
+        const on = d.auto_restart === 1;
+        btn.style.background = on ? 'var(--accent)' : '#e5e7eb';
+        btn.style.borderColor = on ? 'var(--accent)' : 'rgba(100,116,139,0.55)';
+        const knob = btn.querySelector('.toggle-knob');
+        const text = btn.querySelector('.toggle-text');
+        if (knob) knob.style.left = on ? '25px' : '3px';
+        if (text) {
+          text.textContent = on ? '开' : '关';
+          text.style.left = on ? '7px' : '21px';
+          text.style.color = on ? '#fff' : '#64748b';
+        }
+        btn.title = on ? '自动重启已开启' : '已关闭';
+        showToast(on ? '已开启自动重启' : '已关闭自动重启', 'info');
+      }
   } catch(e) { showToast('操作失败', 'error'); }
 }
 async function calibrateTask(id, btn) {
@@ -431,6 +609,24 @@ function clearSelection() {
   sa.checked = false; sa.indeterminate = false;
   document.getElementById('batch-toolbar').style.display = 'none';
 }
+async function checkYouTubeTask(id, btn) {
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '检测中';
+  try {
+    const r = await fetch('/tasks/' + id + '/check-youtube', {
+      method: 'POST',
+      headers: { 'x-csrf-token': _csrf },
+    });
+    const d = await r.json();
+    showToast(d.msg || (d.ok ? 'YouTube 状态已更新' : '检测失败'), d.ok ? 'success' : 'error');
+    if (d.ok) setTimeout(() => location.reload(), 600);
+  } catch (e) {
+    showToast('YouTube 检测失败：' + e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = orig;
+}
 async function batchAction(action) {
   const ids = getSelectedIds();
   if (ids.length === 0) return;
@@ -456,6 +652,7 @@ function openEditModal(id) {
   document.getElementById('edit-vps-id').value = task.vps_id || '';
   document.getElementById('edit-source-url').value = task.source_url || '';
   document.getElementById('edit-backup-urls').value = task.backup_urls || '';
+  loadEditMediaFiles(task.vps_id || '', task.source_url || '');
   document.getElementById('edit-rtmp-url').value = task.rtmp_url || '';
   document.getElementById('edit-stream-key').value = task.stream_key || '';
   document.getElementById('edit-auto-restart').checked = !!task.auto_restart;
@@ -491,6 +688,8 @@ async function submitEdit() {
 
 // ── 快速上传到 VPS ─────────────────────────────────────
 let quickXhr = null;
+let quickCancelled = false;
+const QUICK_CHUNK_SIZE = 8 * 1024 * 1024;
 
 function openQuickUpload() {
   const vpsId = document.getElementById('task-vps-select').value;
@@ -504,6 +703,7 @@ function openQuickUpload() {
   document.getElementById('quick-bar').style.width = '0%';
 }
 function closeQuickUpload() {
+  quickCancelled = true;
   if (quickXhr) { quickXhr.abort(); quickXhr = null; }
   document.getElementById('quick-upload-panel').style.display = 'none';
 }
@@ -511,61 +711,154 @@ function onQuickFileSelect(input) {
   document.getElementById('quick-upload-btn').disabled = !input.files[0];
   document.getElementById('quick-result').style.display = 'none';
 }
-function startQuickUpload() {
+function quickJson(method, url, body, headers) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    quickXhr = xhr;
+    xhr.onload = () => {
+      quickXhr = null;
+      let data = null;
+      try { data = JSON.parse(xhr.responseText || '{}'); }
+      catch (_) { reject(new Error('响应解析失败')); return; }
+      if (xhr.status >= 200 && xhr.status < 300 && data.ok !== false) resolve(data);
+      else reject(new Error(data.msg || `HTTP ${xhr.status}`));
+    };
+    xhr.onerror = () => { quickXhr = null; reject(new Error('网络错误')); };
+    xhr.onabort = () => { quickXhr = null; reject(new Error('已取消')); };
+    xhr.open(method, url);
+    if (_csrf) xhr.setRequestHeader('x-csrf-token', _csrf);
+    if (headers) Object.entries(headers).forEach(([k, v]) => xhr.setRequestHeader(k, v));
+    xhr.send(body);
+  });
+}
+
+function quickUploadChunk(vpsId, session, index, chunk, fileSize, uploadedBytesBefore) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append('chunk', chunk, session.name + '.part');
+    const xhr = new XMLHttpRequest();
+    quickXhr = xhr;
+    xhr.timeout = 180000;
+    xhr.upload.onprogress = (e) => {
+      const loaded = uploadedBytesBefore + (e.lengthComputable ? e.loaded : 0);
+      const pct = Math.min(100, Math.floor(loaded / fileSize * 100));
+      document.getElementById('quick-bar').style.width = pct + '%';
+      document.getElementById('quick-pct').textContent = pct + '%';
+      document.getElementById('quick-status-text').textContent = `正在上传第 ${index + 1}/${session.totalChunks} 片…`;
+    };
+    xhr.upload.onload = () => {
+      document.getElementById('quick-status-text').textContent = `第 ${index + 1}/${session.totalChunks} 片已发送，等待 VPS 写入确认…`;
+    };
+    xhr.onload = () => {
+      quickXhr = null;
+      let data = null;
+      try { data = JSON.parse(xhr.responseText || '{}'); }
+      catch (_) { reject(new Error(`分片 ${index + 1} 响应解析失败`)); return; }
+      if (xhr.status >= 200 && xhr.status < 300 && data.ok) resolve(data);
+      else reject(new Error(data.msg || `分片 ${index + 1} 上传失败`));
+    };
+    xhr.onerror = () => { quickXhr = null; reject(new Error(`分片 ${index + 1} 网络错误`)); };
+    xhr.ontimeout = () => { quickXhr = null; reject(new Error(`分片 ${index + 1} 等待 VPS 写入超时`)); };
+    xhr.onabort = () => { quickXhr = null; reject(new Error('已取消')); };
+    xhr.open('POST', `/media/${vpsId}/upload-chunk?uploadId=${encodeURIComponent(session.uploadId)}&index=${index}`);
+    if (_csrf) xhr.setRequestHeader('x-csrf-token', _csrf);
+    xhr.send(form);
+  });
+}
+
+async function quickUploadChunkWithRetry(vpsId, session, index, chunk, fileSize, uploadedBytesBefore) {
+  let lastErr;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    if (quickCancelled) throw new Error('已取消');
+    try {
+      return await quickUploadChunk(vpsId, session, index, chunk, fileSize, uploadedBytesBefore);
+    } catch (e) {
+      lastErr = e;
+      if (quickCancelled || /已取消/.test(e.message)) throw e;
+      document.getElementById('quick-status-text').textContent = `第 ${index + 1} 片失败，正在重试 ${attempt}/3…`;
+      await new Promise(r => setTimeout(r, 800 * attempt));
+    }
+  }
+  throw lastErr;
+}
+
+async function startQuickUpload() {
   const input = document.getElementById('quick-file-input');
-  if (!input.files[0]) return;
+  const file = input.files[0];
+  if (!file) return;
   const vpsId = document.getElementById('task-vps-select').value;
   if (!vpsId) { showToast('请先选择 VPS', 'error'); return; }
+  if (file.size > 3 * 1024 * 1024 * 1024) {
+    showToast('文件超过 3 GB，请到媒体库按提示用 SFTP 上传', 'error');
+    return;
+  }
 
-  const formData = new FormData();
-  formData.append('file', input.files[0]);
+  quickCancelled = false;
   document.getElementById('quick-upload-btn').disabled = true;
   document.getElementById('quick-progress-wrap').style.display = 'block';
   document.getElementById('quick-result').style.display = 'none';
-  document.getElementById('quick-bar').style.background = '#2563eb';
+  document.getElementById('quick-bar').style.background = '#14b8a6';
+  document.getElementById('quick-bar').style.width = '0%';
+  document.getElementById('quick-pct').textContent = '0%';
 
-  const xhr = new XMLHttpRequest();
-  quickXhr = xhr;
-  xhr.upload.onprogress = (e) => {
-    if (!e.lengthComputable) return;
-    const pct = Math.round(e.loaded / e.total * 100);
-    document.getElementById('quick-bar').style.width = pct + '%';
-    document.getElementById('quick-pct').textContent = pct + '%';
-    document.getElementById('quick-status-text').textContent = pct < 100 ? '上传到服务器…' : '正在 SFTP 传输到 VPS…';
-  };
-  xhr.onload = () => {
-    quickXhr = null;
-    const resultEl = document.getElementById('quick-result');
-    resultEl.style.display = 'block';
-    try {
-      const d = JSON.parse(xhr.responseText);
-      if (d.ok) {
-        resultEl.style.color = '#34d399';
-        resultEl.textContent = '✓ ' + d.msg;
-        document.getElementById('quick-status-text').textContent = '完成';
-        showToast(d.msg, 'success');
-        setTimeout(() => { loadMediaFiles(vpsId); closeQuickUpload(); }, 1200);
-      } else {
-        resultEl.style.color = '#f87171';
-        resultEl.textContent = '✗ ' + d.msg;
-        document.getElementById('quick-bar').style.background = '#ef4444';
-        document.getElementById('quick-upload-btn').disabled = false;
-      }
-    } catch(e) {
-      resultEl.style.color = '#f87171';
-      resultEl.textContent = '响应解析失败';
-      document.getElementById('quick-upload-btn').disabled = false;
+  const resultEl = document.getElementById('quick-result');
+  try {
+    document.getElementById('quick-status-text').textContent = '正在创建分片上传会话…';
+    const session = await quickJson('POST', `/media/${vpsId}/upload-session`, JSON.stringify({
+      name: file.name,
+      size: file.size,
+      lastModified: String(file.lastModified || ''),
+      chunkSize: QUICK_CHUNK_SIZE,
+    }), { 'Content-Type': 'application/json' });
+
+    const uploaded = new Set(session.uploaded || []);
+    let uploadedBytes = 0;
+    for (let i = 0; i < session.totalChunks; i++) {
+      const start = i * session.chunkSize;
+      const end = Math.min(file.size, start + session.chunkSize);
+      if (uploaded.has(i)) uploadedBytes += end - start;
     }
-  };
-  xhr.onerror = () => {
-    quickXhr = null;
-    const resultEl = document.getElementById('quick-result');
+
+    for (let i = 0; i < session.totalChunks; i++) {
+      if (uploaded.has(i)) continue;
+      if (quickCancelled) throw new Error('已取消');
+      const start = i * session.chunkSize;
+      const end = Math.min(file.size, start + session.chunkSize);
+      const chunk = file.slice(start, end);
+      await quickUploadChunkWithRetry(vpsId, session, i, chunk, file.size, uploadedBytes);
+      uploadedBytes += chunk.size;
+    }
+
+    document.getElementById('quick-status-text').textContent = '正在合并 VPS 文件…';
+    const done = await quickJson('POST', `/media/${vpsId}/upload-complete`, JSON.stringify({
+      uploadId: session.uploadId,
+      name: file.name,
+      size: file.size,
+      lastModified: String(file.lastModified || ''),
+      chunkSize: session.chunkSize,
+    }), { 'Content-Type': 'application/json' });
+
+    resultEl.style.display = 'block';
+    resultEl.style.color = '#34d399';
+    resultEl.textContent = '完成：' + done.msg;
+    document.getElementById('quick-status-text').textContent = '完成';
+    document.getElementById('quick-bar').style.width = '100%';
+    document.getElementById('quick-pct').textContent = '100%';
+    const remotePath = done.remotePath || done.row?.remote_path || session.remotePath || '';
+    if (remotePath) {
+      document.getElementById('source-url-input').value = remotePath;
+    }
+    showToast(done.msg, 'success');
+    setTimeout(async () => {
+      await loadMediaFiles(vpsId, remotePath);
+      closeQuickUpload();
+    }, 800);
+  } catch (e) {
     resultEl.style.display = 'block';
     resultEl.style.color = '#f87171';
-    resultEl.textContent = '网络错误';
+    resultEl.textContent = (quickCancelled || /已取消/.test(e.message)) ? '已取消' : '失败：' + e.message;
+    document.getElementById('quick-bar').style.background = '#ef4444';
     document.getElementById('quick-upload-btn').disabled = false;
-  };
-  xhr.open('POST', `/media/${vpsId}/upload`);
-  xhr.send(formData);
+  }
 }
 </script>

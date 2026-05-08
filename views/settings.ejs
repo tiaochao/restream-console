@@ -30,14 +30,26 @@
             <span style="font-size:12px;color:var(--text-3);font-weight:400;margin-left:8px;">（用于检测开播状态，填入后识别成功率更高）</span>
           </label>
           <textarea name="douyin_cookies" rows="3" placeholder="ttwid=xxx; passport_csrf_token=xxx; ..."
+            id="douyin-cookies-input"
             class="form-textarea" style="font-family:monospace;resize:vertical;"><%= cfg.douyin_cookies %></textarea>
           <div class="form-hint" style="display:flex;flex-direction:column;gap:4px;margin-top:6px;">
-            <span>获取方式：浏览器打开 <a href="https://live.douyin.com" target="_blank" class="link">live.douyin.com</a>，登录后按 F12 → Network → 找任意请求 → 复制 Cookie 请求头的值</span>
+            <span>推荐方式：在抖音页面复制请求头 Cookie，回到这里点“从剪贴板导入并保存”。</span>
+            <span>获取位置：打开抖音并登录，按 F12 → Network → 刷新页面 → 点任意请求 → Headers → Request Headers → Cookie。</span>
             <span>至少需要 <code style="background:rgba(0,0,0,0.4);padding:1px 5px;border-radius:4px;font-family:monospace;font-size:11px;">ttwid</code> 和 <code style="background:rgba(0,0,0,0.4);padding:1px 5px;border-radius:4px;font-family:monospace;font-size:11px;">passport_csrf_token</code></span>
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <button type="submit" class="btn btn-primary">保存 Cookie</button>
+          <button type="button" onclick="openCookieWizard()" class="btn btn-secondary" style="background:rgba(16,185,129,0.1);border-color:rgba(16,185,129,0.35);color:#34d399;">快捷获取向导</button>
+          <button type="button" onclick="importCookieFromClipboard()" id="paste-cookie-btn" class="btn btn-primary">从剪贴板导入并保存</button>
+          <details style="width:100%;font-size:12px;color:var(--text-3);">
+            <summary style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;">备用：用书签脚本自动采集</summary>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;">
+              <a id="douyin-bookmarklet" href="#" class="btn btn-secondary" title="拖到浏览器书签栏，之后在抖音页面点击它">抖音 Cookie 采集</a>
+              <button type="button" onclick="copyDouyinCollector()" id="copy-cookie-btn" class="btn btn-secondary">复制脚本主体</button>
+              <span>拖到书签栏后，在抖音页面点击书签即可自动保存。</span>
+            </div>
+          </details>
           <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
             <input id="test-url" type="text" placeholder="抖音直播间 URL（留空用默认测试地址）"
               class="form-input" style="flex:1;min-width:0;">
@@ -47,6 +59,7 @@
           </div>
           <span id="test-result" style="font-size:13px;"></span>
         </div>
+        <div id="cookie-helper-result" class="form-hint"></div>
       </form>
 
       <!-- 检测间隔 -->
@@ -60,6 +73,20 @@
           <input type="number" name="monitor_interval" value="<%= cfg.monitor_interval %>" min="1" max="60"
             class="form-input" style="width:140px;">
           <div class="form-hint">修改后需重启服务生效，当前为 <%= cfg.monitor_interval %> 分钟</div>
+        </div>
+        <div>
+          <label class="form-label">YouTube Data API Key 池</label>
+          <textarea name="youtube_api_keys" id="youtube-api-keys-input" rows="5" autocomplete="off" spellcheck="false"
+            placeholder="每行一个 API Key，也支持用逗号、空格分隔"
+            class="form-textarea form-mono" style="resize:vertical;"><%= cfg.youtube_api_keys %></textarea>
+          <div class="form-hint">
+            当前已配置 <%= cfg.youtube_api_key_count || 0 %> 个 Key。检测 YouTube 状态时会按当前用户的 Key 池轮询使用，遇到配额耗尽、限速或 Key 无效会自动切换下一个；不配置时只保留 RTMP 连接检测。
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;">
+            <button type="button" onclick="testYouTubeApiKeys()" id="youtube-api-test-btn" class="btn btn-secondary">检测 API 池</button>
+            <span id="youtube-api-test-summary" style="font-size:13px;color:var(--text-3);"></span>
+          </div>
+          <div id="youtube-api-test-results" style="display:none;margin-top:10px;border:1px solid rgba(255,255,255,0.08);border-radius:8px;overflow:hidden;"></div>
         </div>
         <div>
           <button type="submit" class="btn btn-secondary">保存间隔</button>
@@ -144,8 +171,260 @@ chmod +x /usr/local/bin/yt-dlp</pre>
   </div>
 </div>
 
+<!-- Cookie 获取向导弹窗 -->
+<div id="cookie-wizard-modal" class="modal-overlay hidden">
+  <div class="modal" style="max-width:540px;">
+    <div class="modal-header">
+      <span class="modal-title">快捷获取抖音 Cookie</span>
+      <button class="modal-close" onclick="document.getElementById('cookie-wizard-modal').classList.add('hidden')">✕</button>
+    </div>
+    <div class="modal-body stack" style="gap:20px;">
+
+      <!-- Step 1 -->
+      <div style="display:flex;gap:14px;align-items:flex-start;">
+        <div style="flex-shrink:0;width:28px;height:28px;border-radius:50%;background:#0d9488;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;">1</div>
+        <div class="stack" style="gap:8px;flex:1;">
+          <div style="font-weight:600;color:var(--text-1);">在浏览器中打开抖音并登录</div>
+          <div style="font-size:13px;color:var(--text-2);">需要登录才能获取有效的 Cookie。</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button onclick="window.open('https://www.douyin.com/','_blank','noopener,noreferrer')" class="btn btn-secondary btn-sm">打开抖音首页</button>
+            <button onclick="window.open('https://live.douyin.com/','_blank','noopener,noreferrer')" class="btn btn-secondary btn-sm">打开直播页</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2 -->
+      <div style="display:flex;gap:14px;align-items:flex-start;">
+        <div style="flex-shrink:0;width:28px;height:28px;border-radius:50%;background:#0d9488;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;">2</div>
+        <div class="stack" style="gap:8px;flex:1;">
+          <div style="font-weight:600;color:var(--text-1);">打开开发者工具，复制 Cookie</div>
+          <ol style="font-size:13px;color:var(--text-2);padding-left:16px;margin:0;line-height:1.9;">
+            <li>按 <kbd style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:4px;padding:1px 5px;font-size:11px;">F12</kbd> 打开开发者工具</li>
+            <li>点击顶部 <strong>Network（网络）</strong> 选项卡</li>
+            <li>刷新页面（Ctrl+R），点击任意一个请求</li>
+            <li>在右侧找到 <strong>Request Headers → Cookie</strong></li>
+            <li>右键点击 Cookie 值，选择 <strong>复制值</strong></li>
+          </ol>
+          <div style="font-size:12px;color:var(--text-2);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:8px 12px;">
+            另一种方式：在抖音页面的地址栏输入 <code style="font-family:monospace;background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;">javascript:copy(document.cookie)</code> 并回车，直接复制所有 Cookie。
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3 -->
+      <div style="display:flex;gap:14px;align-items:flex-start;">
+        <div style="flex-shrink:0;width:28px;height:28px;border-radius:50%;background:#0d9488;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;">3</div>
+        <div class="stack" style="gap:8px;flex:1;">
+          <div style="font-weight:600;color:var(--text-1);">回到这里，一键导入并保存</div>
+          <div style="font-size:13px;color:var(--text-2);">复制 Cookie 后点击下方按钮，自动填入并保存。</div>
+          <button onclick="importCookieFromClipboard();document.getElementById('cookie-wizard-modal').classList.add('hidden')" class="btn btn-primary">从剪贴板导入并保存</button>
+          <div id="wizard-result" class="form-hint"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
 <script>
 const _csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
+function openCookieWizard() {
+  document.getElementById('cookie-wizard-modal').classList.remove('hidden');
+}
+
+function setHelperResult(msg, ok = true) {
+  const el = document.getElementById('cookie-helper-result');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = ok ? 'var(--text-3)' : '#f87171';
+}
+
+function openDouyinHome() {
+  window.open('https://www.douyin.com/', '_blank', 'noopener,noreferrer');
+}
+
+function openDouyinLive() {
+  window.open('https://live.douyin.com/', '_blank', 'noopener,noreferrer');
+}
+
+function buildDouyinCollector() {
+  const target = `${location.origin}/settings`;
+  return `javascript:(()=>{const c=document.cookie;if(!/(^|\\.)douyin\\.com$/.test(location.hostname)){alert('请先在 douyin.com 页面运行');return;}if(!c){alert('没有读取到 Cookie，请确认已登录抖音');return;}location.href='${target}#douyin_cookie='+encodeURIComponent(c);})();`;
+}
+
+function buildDouyinCollectorBody() {
+  return buildDouyinCollector().replace(/^javascript:/, '');
+}
+
+function setupDouyinBookmarklet() {
+  const link = document.getElementById('douyin-bookmarklet');
+  if (!link) return;
+  link.href = buildDouyinCollector();
+  link.addEventListener('click', function(e) {
+    if (!/(^|\.)douyin\.com$/.test(location.hostname)) {
+      e.preventDefault();
+      setHelperResult('请把“抖音 Cookie 采集”拖到浏览器书签栏；然后打开抖音页面并点击这个书签。');
+    }
+  });
+}
+
+async function copyDouyinCollector() {
+  const btn = document.getElementById('copy-cookie-btn');
+  const text = buildDouyinCollectorBody();
+  try {
+    await navigator.clipboard.writeText(text);
+    if (btn) btn.textContent = '已复制';
+    setHelperResult('已复制脚本主体。请打开抖音页面，在地址栏先手动输入 javascript:，再粘贴脚本主体并回车。');
+  } catch (e) {
+    const input = document.getElementById('douyin-cookies-input');
+    if (input) {
+      input.value = text;
+      input.focus();
+      input.select();
+    }
+    setHelperResult('浏览器阻止了自动复制，已把脚本主体放到输入框，请手动复制后再恢复 Cookie 内容。', false);
+  }
+  setTimeout(() => { if (btn) btn.textContent = '复制脚本主体'; }, 1800);
+}
+
+async function importCookieFromClipboard() {
+  const btn = document.getElementById('paste-cookie-btn');
+  const input = document.getElementById('douyin-cookies-input');
+  const originalText = btn ? btn.textContent : '';
+  try {
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '导入中...';
+    }
+    const text = (await navigator.clipboard.readText()).trim();
+    if (!text || !text.includes('=')) {
+      setHelperResult('剪贴板里没有有效 Cookie。请复制请求头 Cookie 的值后再导入。', false);
+      return;
+    }
+    input.value = text;
+    await saveCookieValue(text);
+    setHelperResult('已从剪贴板导入，并保存到当前账号。');
+    if (btn) btn.textContent = '已保存';
+  } catch (e) {
+    setHelperResult('无法读取剪贴板或自动保存失败，可以手动粘贴到输入框后点“保存 Cookie”。', false);
+  }
+  setTimeout(() => {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalText || '从剪贴板导入并保存';
+    }
+  }, 1800);
+}
+
+async function saveCookieValue(cookie) {
+  const r = await fetch('/settings/cookies', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ douyin_cookies: cookie }).toString(),
+  });
+  if (!r.ok) throw new Error('保存失败');
+}
+
+function youtubeApiStateLabel(state) {
+  return {
+    ok: '可用',
+    quota: '配额耗尽',
+    rate_limited: '限速',
+    invalid: 'Key 无效',
+    forbidden: '权限错误',
+    error: '检测失败',
+  }[state] || state || '未知';
+}
+
+function renderYouTubeApiKeyResults(results) {
+  const box = document.getElementById('youtube-api-test-results');
+  if (!box) return;
+  if (!results || results.length === 0) {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
+  box.style.display = 'block';
+  box.innerHTML = results.map((r, idx) => {
+    const ok = !!r.ok;
+    const color = ok ? '#34d399' : '#f87171';
+    const detail = r.msg ? `<div style="font-size:12px;color:var(--text-3);margin-top:3px;line-height:1.5;">${escapeHtml(r.msg)}</div>` : '';
+    const pause = r.pausedUntil ? `<div style="font-size:12px;color:var(--text-3);margin-top:3px;">暂停到 ${escapeHtml(String(r.pausedUntil).slice(0, 16).replace('T', ' '))}</div>` : '';
+    return `
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:10px 12px;border-top:${idx === 0 ? '0' : '1px solid rgba(255,255,255,0.08)'};">
+        <div style="min-width:0;">
+          <div class="form-mono" style="font-size:13px;color:var(--text-1);">${escapeHtml(r.masked || ('Key ' + (idx + 1)))}</div>
+          ${detail}${pause}
+        </div>
+        <span class="badge ${ok ? 'badge-green' : 'badge-red'}" style="white-space:nowrap;color:${color};">${youtubeApiStateLabel(r.state)}</span>
+      </div>
+    `;
+  }).join('');
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function testYouTubeApiKeys() {
+  const btn = document.getElementById('youtube-api-test-btn');
+  const input = document.getElementById('youtube-api-keys-input');
+  const summary = document.getElementById('youtube-api-test-summary');
+  if (!btn || !input || !summary) return;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '检测中...';
+  summary.textContent = '';
+  renderYouTubeApiKeyResults([]);
+  try {
+    const body = new URLSearchParams({ youtube_api_keys: input.value });
+    const r = await fetch('/settings/test-youtube-api-keys', {
+      method: 'POST',
+      headers: _csrf ? { 'x-csrf-token': _csrf } : {},
+      body,
+    });
+    const d = await r.json();
+    summary.textContent = d.msg || (d.ok ? '检测完成' : '检测失败');
+    summary.style.color = d.ok ? 'var(--text-3)' : '#f87171';
+    renderYouTubeApiKeyResults(d.results || []);
+  } catch (e) {
+    summary.textContent = '检测失败：' + e.message;
+    summary.style.color = '#f87171';
+  }
+  btn.disabled = false;
+  btn.textContent = original;
+}
+
+async function importCookieFromHash() {
+  const prefix = '#douyin_cookie=';
+  if (!location.hash.startsWith(prefix)) return;
+
+  const cookie = decodeURIComponent(location.hash.slice(prefix.length)).trim();
+  history.replaceState(null, '', location.pathname + location.search);
+  const input = document.getElementById('douyin-cookies-input');
+  if (input) input.value = cookie;
+
+  if (!cookie || !cookie.includes('=')) {
+    setHelperResult('没有获取到有效的抖音 Cookie，请确认已登录抖音后再采集。', false);
+    return;
+  }
+
+  try {
+    await saveCookieValue(cookie);
+    setHelperResult('抖音 Cookie 已快捷导入并保存到当前账号。');
+  } catch (e) {
+    setHelperResult('已填入 Cookie，但自动保存失败，请点击“保存 Cookie”。', false);
+  }
+}
+
+setupDouyinBookmarklet();
+importCookieFromHash();
 
 async function testCookie() {
   const btn = document.getElementById('test-btn');

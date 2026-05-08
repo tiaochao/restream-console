@@ -1,0 +1,239 @@
+<div class="page-header">
+  <div>
+    <div class="page-title">YouTube 频道</div>
+    <div class="page-subtitle">管理频道、查看直播记录与视频时长</div>
+  </div>
+  <button class="btn btn-primary" onclick="document.getElementById('add-modal').style.display='flex'">
+    <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+    添加频道
+  </button>
+</div>
+
+<% if (!channels.length) { %>
+  <div class="card" style="padding:48px;text-align:center;color:var(--text-3);">
+    <div style="font-size:36px;margin-bottom:12px;">📺</div>
+    <div style="font-size:15px;font-weight:600;color:var(--text-2);margin-bottom:6px;">还没有频道</div>
+    <div style="font-size:13px;">点击右上角「添加频道」，支持频道链接、频道 ID 或 @handle</div>
+  </div>
+<% } else { %>
+  <div style="display:flex;flex-direction:column;gap:16px;">
+    <% channels.forEach(function(ch) { %>
+    <div class="card" id="ch-card-<%= ch.id %>">
+      <!-- 频道头部 -->
+      <div style="padding:16px 20px;display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--border);">
+        <% if (ch.thumbnail_url) { %>
+          <img src="<%= ch.thumbnail_url %>" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;flex-shrink:0;">
+        <% } else { %>
+          <div style="width:44px;height:44px;border-radius:50%;background:var(--accent-lite);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:18px;">📺</div>
+        <% } %>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;font-size:14px;color:var(--text-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            <a href="https://www.youtube.com/channel/<%= ch.channel_id %>" target="_blank" class="link" style="color:var(--text-1);">
+              <%= ch.title || ch.channel_id %>
+            </a>
+          </div>
+          <div style="font-size:12px;color:var(--text-3);margin-top:2px;">
+            <%= ch.handle ? ch.handle + ' · ' : '' %><%= ch.channel_id %>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:20px;flex-shrink:0;">
+          <div style="text-align:center;">
+            <div style="font-size:15px;font-weight:700;color:var(--text-1);"><%= fmtCount(ch.subscriber_count) %></div>
+            <div style="font-size:11px;color:var(--text-3);">订阅</div>
+          </div>
+          <div style="text-align:center;">
+            <div style="font-size:15px;font-weight:700;color:var(--text-1);"><%= ch.video_count || '--' %></div>
+            <div style="font-size:11px;color:var(--text-3);">视频数</div>
+          </div>
+          <% if (ch.linked_sk_count > 0) { %>
+          <div style="text-align:center;min-width:64px;">
+            <div style="font-size:11px;color:var(--text-3);">关联推流码</div>
+            <div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:3px;justify-content:center;">
+              <% ch.linked_sk_names.forEach(function(skName) { %>
+                <span style="font-size:10px;background:var(--accent-lite);color:var(--accent);padding:1px 6px;border-radius:4px;white-space:nowrap;"><%= skName %></span>
+              <% }); %>
+            </div>
+          </div>
+          <% } %>
+          <div style="text-align:center;min-width:72px;">
+            <div style="font-size:11px;color:var(--text-3);">上次同步</div>
+            <div style="font-size:12px;color:var(--text-2);">
+              <%= ch.last_synced ? ch.last_synced.slice(0,16).replace('T',' ') : '未同步' %>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-secondary btn-sm" onclick="syncChannel(<%= ch.id %>, this)" id="sync-btn-<%= ch.id %>">同步</button>
+            <button class="btn btn-secondary btn-sm" onclick="toggleDetail(<%= ch.id %>)">展开</button>
+            <form method="POST" action="/youtube-channels/<%= ch.id %>/delete" style="margin:0" onsubmit="return confirm('确认删除该频道及其所有记录？')">
+              <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+              <button type="submit" class="btn btn-danger btn-sm">删除</button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- 同步状态提示 -->
+      <div id="sync-msg-<%= ch.id %>" style="display:none;padding:8px 20px;font-size:12px;background:var(--info-bg);color:var(--info);border-bottom:1px solid var(--info-bdr);"></div>
+
+      <!-- 展开详情区 -->
+      <div id="detail-<%= ch.id %>" style="display:none;">
+        <!-- Tab 切换 -->
+        <div style="padding:12px 20px 0;display:flex;gap:0;border-bottom:1px solid var(--border);">
+          <button class="tab-btn active" id="tab-live-<%= ch.id %>" onclick="switchTab(<%= ch.id %>,'live')"
+            style="padding:8px 16px;font-size:13px;font-weight:500;border:none;background:none;cursor:pointer;color:var(--accent);border-bottom:2px solid var(--accent);margin-bottom:-1px;">
+            直播记录
+          </button>
+          <button class="tab-btn" id="tab-video-<%= ch.id %>" onclick="switchTab(<%= ch.id %>,'video')"
+            style="padding:8px 16px;font-size:13px;font-weight:500;border:none;background:none;cursor:pointer;color:var(--text-2);border-bottom:2px solid transparent;margin-bottom:-1px;">
+            视频列表
+          </button>
+        </div>
+
+        <!-- 直播面板 -->
+        <div id="panel-live-<%= ch.id %>" style="overflow-x:auto;">
+          <div id="live-content-<%= ch.id %>" style="padding:20px;color:var(--text-3);font-size:13px;">
+            点击同步后展开可查看数据
+          </div>
+        </div>
+
+        <!-- 视频面板 -->
+        <div id="panel-video-<%= ch.id %>" style="display:none;overflow-x:auto;">
+          <div id="video-content-<%= ch.id %>" style="padding:20px;color:var(--text-3);font-size:13px;">
+            切换到此标签后自动加载
+          </div>
+        </div>
+      </div>
+    </div>
+    <% }); %>
+  </div>
+<% } %>
+
+<!-- 添加频道 Modal -->
+<div id="add-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)this.style.display='none'">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">添加 YouTube 频道</span>
+      <button class="modal-close" onclick="document.getElementById('add-modal').style.display='none'">✕</button>
+    </div>
+    <div class="modal-body">
+      <form method="POST" action="/youtube-channels">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <div style="margin-bottom:16px;">
+          <label class="form-label">频道链接 / 频道 ID / @handle</label>
+          <input type="text" name="input" class="form-input" required autofocus
+            placeholder="https://youtube.com/@handle 或 UCxxxxxx 或 @handle">
+          <div class="form-hint">支持频道主页链接、频道 ID（UC开头）、@handle 三种格式</div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button type="button" class="btn btn-secondary" onclick="document.getElementById('add-modal').style.display='none'">取消</button>
+          <button type="submit" class="btn btn-primary">添加频道</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+const _detailLoaded = {};  // { chId: { live: bool, video: bool } }
+
+function toggleDetail(chId) {
+  const el = document.getElementById('detail-' + chId);
+  const isHidden = el.style.display === 'none';
+  el.style.display = isHidden ? 'block' : 'none';
+  if (isHidden && !(_detailLoaded[chId]?.live)) {
+    loadVideos(chId, 'live');
+  }
+}
+
+function switchTab(chId, type) {
+  ['live', 'video'].forEach(t => {
+    document.getElementById('panel-' + t + '-' + chId).style.display = t === type ? 'block' : 'none';
+    const btn = document.getElementById('tab-' + t + '-' + chId);
+    if (t === type) {
+      btn.style.color = 'var(--accent)';
+      btn.style.borderBottom = '2px solid var(--accent)';
+    } else {
+      btn.style.color = 'var(--text-2)';
+      btn.style.borderBottom = '2px solid transparent';
+    }
+  });
+  if (!_detailLoaded[chId]?.[type]) loadVideos(chId, type);
+}
+
+async function loadVideos(chId, type) {
+  const contentEl = document.getElementById(type + '-content-' + chId);
+  contentEl.innerHTML = '<span style="color:var(--text-3)">加载中...</span>';
+  try {
+    const r = await fetch(`/youtube-channels/${chId}/videos?type=${type}`);
+    const data = await r.json();
+    if (!data.ok) { contentEl.textContent = data.msg; return; }
+    if (!_detailLoaded[chId]) _detailLoaded[chId] = {};
+    _detailLoaded[chId][type] = true;
+    renderVideos(contentEl, data.videos, type);
+  } catch (e) {
+    contentEl.textContent = '加载失败: ' + e.message;
+  }
+}
+
+function renderVideos(el, videos, type) {
+  if (!videos.length) {
+    el.innerHTML = '<div style="padding:20px;color:var(--text-3);font-size:13px;">暂无数据，请先点击「同步」</div>';
+    return;
+  }
+  const isLive = type === 'live';
+  const headers = isLive
+    ? ['日期', '标题', '时长', '播放量', '峰值在线', '']
+    : ['日期', '标题', '时长', '播放量', ''];
+  let html = '<table class="data-table"><thead><tr>' +
+    headers.map(h => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
+
+  for (const v of videos) {
+    html += '<tr>';
+    html += `<td style="white-space:nowrap;color:var(--text-2);font-size:12px;">${v.dateStr}</td>`;
+    html += `<td style="max-width:360px;"><a href="${v.url}" target="_blank" class="link" style="font-size:13px;">${escHtml(v.title)}</a></td>`;
+    html += `<td style="white-space:nowrap;font-variant-numeric:tabular-nums;">${v.durationFmt}</td>`;
+    html += `<td style="white-space:nowrap;">${v.viewFmt}</td>`;
+    if (isLive) html += `<td style="white-space:nowrap;">${v.concurrentFmt}</td>`;
+    html += `</tr>`;
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+  el.style.padding = '0';
+}
+
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function syncChannel(chId, btn) {
+  const msgEl = document.getElementById('sync-msg-' + chId);
+  btn.disabled = true;
+  btn.textContent = '同步中...';
+  msgEl.textContent = '正在从 YouTube 拉取数据，请稍候...';
+  msgEl.style.display = 'block';
+  try {
+    const r = await fetch(`/youtube-channels/${chId}/sync`, { method: 'POST' });
+    const data = await r.json();
+    msgEl.textContent = data.msg;
+    msgEl.style.background = data.ok ? 'var(--success-bg)' : 'var(--error-bg)';
+    msgEl.style.color = data.ok ? 'var(--success)' : 'var(--error)';
+    msgEl.style.borderBottom = data.ok ? '1px solid var(--success-bdr)' : '1px solid var(--error-bdr)';
+    if (data.ok) {
+      // Reload detail if open
+      if (_detailLoaded[chId]) {
+        _detailLoaded[chId] = {};
+        const curType = document.getElementById('panel-video-' + chId).style.display === 'block' ? 'video' : 'live';
+        loadVideos(chId, curType);
+      }
+      // Refresh page after 2s to update channel meta stats
+      setTimeout(() => location.reload(), 2000);
+    }
+  } catch (e) {
+    msgEl.textContent = '请求失败: ' + e.message;
+    msgEl.style.color = 'var(--error)';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '同步';
+  }
+}
+</script>

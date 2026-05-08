@@ -22,6 +22,10 @@ function getSetting(key, userId) {
   return db.prepare('SELECT value FROM settings WHERE user_id=? AND key=?').get(userId, key)?.value || '';
 }
 
+function getDouyinCookies(userId) {
+  return getSetting('douyin_cookies', userId) || '';
+}
+
 async function doFetch(url, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -36,7 +40,7 @@ async function doFetch(url, options = {}) {
       redirect: 'follow',
     });
     const text = await res.text();
-    return { status: res.status, text, ok: res.ok };
+    return { status: res.status, text, ok: res.ok, finalUrl: res.url };
   } finally {
     clearTimeout(timer);
   }
@@ -54,6 +58,48 @@ function extractDouyinRoomId(url) {
 function extractDouyinSecUserId(url) {
   const m = url.match(/(?:www\.douyin\.com|v\.douyin\.com)\/user\/([A-Za-z0-9_\-]+)/);
   return m ? m[1] : null;
+}
+
+function normalizeDouyinUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return raw;
+
+  try {
+    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw.replace(/^\/+/, '')}`;
+    const u = new URL(withProtocol);
+    const host = u.hostname.toLowerCase();
+
+    if (host === 'live.douyin.com') {
+      const roomId = u.pathname.match(/\/(\d+)/)?.[1];
+      if (roomId) return `https://live.douyin.com/${roomId}`;
+    }
+
+    if (/douyin\.com$/i.test(host)) {
+      const secUserId = u.pathname.match(/\/user\/([A-Za-z0-9_\-]+)/)?.[1];
+      if (secUserId) return `https://www.douyin.com/user/${secUserId}`;
+    }
+
+    u.search = '';
+    u.hash = '';
+    return u.toString();
+  } catch (_) {
+    return raw;
+  }
+}
+
+async function resolveDouyinInputUrl(url, cookies = '') {
+  let normalized = normalizeDouyinUrl(url);
+  if (!/^https?:\/\/v\.douyin\.com\//i.test(normalized)) return normalized;
+
+  try {
+    const headers = { 'Accept': 'text/html,*/*', 'Referer': 'https://www.douyin.com/' };
+    if (cookies) headers.Cookie = cookies;
+    const res = await doFetch(normalized, { headers });
+    const finalUrl = res.finalUrl || normalized;
+    normalized = normalizeDouyinUrl(finalUrl);
+  } catch (_) {}
+
+  return normalized;
 }
 
 // ── 方式 A：直播间 HTML 解析（无需 Cookie）──────────────────────────
@@ -85,6 +131,19 @@ function parseDouyinAnchor(html) {
   return '';
 }
 
+function parseDouyinHtmlRoomId(html) {
+  const patterns = [
+    /"roomId"\s*:\s*"?(\d{10,})"?/,
+    /\\"roomId\\"\s*:\s*\\"?(\d{10,})/,
+    /roomId&quot;:&quot;(\d{10,})&quot;/,
+  ];
+  for (const re of patterns) {
+    const m = html.match(re);
+    if (m) return m[1];
+  }
+  return '';
+}
+
 async function checkDouyinRoomHtml(roomId, cookies) {
   const headers = {
     'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
@@ -105,6 +164,7 @@ async function checkDouyinRoomHtml(roomId, cookies) {
   return {
     isLive: liveStatus === 'normal',
     anchorName: parseDouyinAnchor(res.text),
+    roomId: parseDouyinHtmlRoomId(res.text) || roomId,
     liveStatus,
     source: 'html',
   };
@@ -138,7 +198,14 @@ async function checkDouyinBySecUserId(secUserId, cookies) {
     const anchorName = user.nickname || '';
     const roomId = user.room_id_str || String(user.room_id || '');
 
-    return { isLive, anchorName, roomId, source: 'user-api' };
+    return {
+      isLive,
+      anchorName,
+      roomId,
+      roomUrl: roomId ? `https://live.douyin.com/${roomId}` : '',
+      source: 'user-api',
+      tentative: isLive,
+    };
   } catch (_) {
     return null;
   }
@@ -189,7 +256,14 @@ async function checkDouyinRoomApi(roomId, cookies) {
       else if (flvUrl) { streamUrl = flvUrl; streamProtocol = 'flv'; }
     }
 
-    return { isLive, anchorName, streamUrl, streamProtocol, source: 'room-api' };
+    return {
+      isLive,
+      anchorName,
+      streamUrl,
+      streamProtocol,
+      source: 'room-api',
+      tentative: isLive,
+    };
   } catch (_) {
     return null;
   }
@@ -198,13 +272,17 @@ async function checkDouyinRoomApi(roomId, cookies) {
 // ── 主入口 ────────────────────────────────────────────────────────────
 
 async function checkDouyin(url, cookies = '') {
+  url = await resolveDouyinInputUrl(url, cookies);
+
   // 1. live.douyin.com/ROOMID 格式
   const roomId = extractDouyinRoomId(url);
   if (roomId) {
-    // 优先 HTML 解析（不依赖 msToken，成功率更高）
+    // HTML 只作为 offline/unknown 线索，不再用 liveStatus=normal 判定正在直播。
     try {
       const htmlResult = await checkDouyinRoomHtml(roomId, cookies);
-      if (htmlResult !== null) return htmlResult;
+      if (htmlResult && htmlResult.liveStatus && htmlResult.liveStatus !== 'normal') {
+        return htmlResult;
+      }
     } catch (_) {}
 
     // HTML 失败后，有 Cookie 时再试 API（只有明确返回 isLive:true 才信任；
@@ -212,11 +290,12 @@ async function checkDouyin(url, cookies = '') {
     if (cookies) {
       try {
         const r = await checkDouyinRoomApi(roomId, cookies);
-        if (r && r.isLive) return r;  // 只信任"正在直播"的结论
+        if (r && r.isLive && r.streamUrl) return r;
+        if (r && r.isLive === false && r.source === 'room-api') return null;
       } catch (_) {}
     }
 
-    // 全部失败 → 返回 null 让调用方用 VPS curl 兜底
+    // 不在本地 API 中确认直播，返回 null 让调用方走真实流验证。
     return null;
   }
 
@@ -226,10 +305,49 @@ async function checkDouyin(url, cookies = '') {
     if (cookies) {
       try {
         const r = await checkDouyinBySecUserId(secUserId, cookies);
-        if (r) return r;
+        if (r && r.isLive && r.roomId) return r;
       } catch (_) {}
     }
     return null;
+  }
+
+  return null;
+}
+
+async function getDouyinChannelInfo(url, cookies = '') {
+  const normalized = await resolveDouyinInputUrl(url, cookies);
+  const roomId = extractDouyinRoomId(normalized);
+  if (roomId) {
+    try {
+      const htmlResult = await checkDouyinRoomHtml(roomId, cookies);
+      if (htmlResult) {
+        return {
+          name: htmlResult.anchorName || `抖音直播间 ${roomId}`,
+          url: normalized,
+          roomId: htmlResult.roomId || roomId,
+          source: 'html',
+        };
+      }
+    } catch (_) {}
+    return { name: `抖音直播间 ${roomId}`, url: normalized, roomId, source: 'url' };
+  }
+
+  const secUserId = extractDouyinSecUserId(normalized);
+  if (secUserId) {
+    if (cookies) {
+      try {
+        const r = await checkDouyinBySecUserId(secUserId, cookies);
+        if (r) {
+          return {
+            name: r.anchorName || `抖音账号 ${secUserId.slice(-8)}`,
+            url: normalized,
+            roomId: r.roomId || '',
+            source: 'user-api',
+          };
+        }
+      } catch (_) {}
+    }
+    return { name: `抖音账号 ${secUserId.slice(-8)}`, url: normalized, roomId: '', source: 'url' };
   }
 
   return null;
@@ -333,7 +451,7 @@ async function checkYouTube(url) {
 // 返回 null 表示不支持或无法本地检测，由调用方用 VPS yt-dlp 兜底
 async function checkChannel(channel) {
   const url = (channel.url || '');
-  const cookies = getSetting('douyin_cookies', channel.user_id);
+  const cookies = getDouyinCookies(channel.user_id);
 
   if (/douyin\.com|douyincdn\.com/i.test(url)) {
     return withDouyinRateLimit(() => checkDouyin(url, cookies));
@@ -393,4 +511,4 @@ async function _resolveDouyinStreamUrl(url, cookies) {
   return null;
 }
 
-module.exports = { checkChannel, checkDouyin, checkYouTube, checkBilibili, checkKuaishou, resolveDouyinStreamUrl };
+module.exports = { checkChannel, checkDouyin, checkYouTube, checkBilibili, checkKuaishou, resolveDouyinStreamUrl, getDouyinChannelInfo };

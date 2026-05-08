@@ -8,6 +8,7 @@ const { requireAuth, requireAdmin } = require('./middleware/auth');
 const { csrfMiddleware } = require('./middleware/csrf');
 const taskManager = require('./services/task-manager');
 const liveMonitor = require('./services/live-monitor');
+const youtubeMonitor = require('./services/youtube-monitor');
 
 const app = express();
 const isProduction = process.env.NODE_ENV === 'production';
@@ -47,13 +48,19 @@ app.use('/stream-keys', requireAuth, require('./routes/stream-keys'));
 app.use('/media', requireAuth, require('./routes/media'));
 app.use('/logs', requireAuth, require('./routes/logs'));
 app.use('/settings', requireAuth, require('./routes/settings'));
+app.use('/youtube-channels', requireAuth, require('./routes/youtube-channels'));
 app.use('/admin', requireAuth, requireAdmin, require('./routes/admin'));
 
 app.get('/', (req, res) => res.redirect('/dashboard'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`转推控制台运行在 http://localhost:${PORT}`);
   taskManager.startMonitor();
   liveMonitor.startLiveMonitor();
+  youtubeMonitor.startMonitor();
 });
+
+server.requestTimeout = 2 * 60 * 60 * 1000;
+server.headersTimeout = 2 * 60 * 60 * 1000 + 30 * 1000;
+server.keepAliveTimeout = 75 * 1000;

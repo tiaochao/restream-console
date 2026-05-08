@@ -1,4 +1,4 @@
-function requireAuth(req, res, next) {
+﻿function requireAuth(req, res, next) {
   if (req.session && req.session.authenticated && req.session.userId) {
     res.locals.currentUser = {
       id: req.session.userId,

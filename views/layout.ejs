@@ -431,6 +431,9 @@
       font-size: 12px;
       font-weight: 500;
       border: 1px solid transparent;
+      white-space: nowrap;
+      word-break: keep-all;
+      line-height: 1.2;
     }
     .badge-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
     .badge-dot.pulse { animation: pulse 2s infinite; }
@@ -442,6 +445,41 @@
     .badge-purple { background:var(--accent-lite); color:var(--accent-text); border-color:rgba(20,184,166,0.25); }
     .badge-gray   { background:rgba(113,113,122,0.12); color:var(--text-2); border-color:rgba(113,113,122,0.2); }
     .badge-orange { background:rgba(249,115,22,0.12); color:#fb923c; border-color:rgba(249,115,22,0.25); }
+    .status-stack {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 6px;
+      min-width: 72px;
+    }
+    .metric-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      color: var(--text-2);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .metric-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(113,113,122,0.2);
+      color: var(--text-2);
+      background: rgba(113,113,122,0.08);
+      font-size: 11.5px;
+      white-space: nowrap;
+    }
+    .action-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 150px;
+    }
 
     /* ══════════════════════════
        ALERTS / MESSAGES
@@ -627,6 +665,11 @@
         <% }); %>
 
         <div class="nav-section-label" style="margin-top:8px;">配置</div>
+        <% const ytChActive = typeof currentPath !== 'undefined' && currentPath.startsWith('/youtube-channels'); %>
+        <a href="/youtube-channels" class="nav-item <%= ytChActive ? 'active' : '' %>">
+          <span class="nav-icon"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M22.54 6.42a2.78 2.78 0 00-1.95-1.96C18.88 4 12 4 12 4s-6.88 0-8.59.46A2.78 2.78 0 001.46 6.42 29 29 0 001 12a29 29 0 00.46 5.58a2.78 2.78 0 001.95 1.96C5.12 20 12 20 12 20s6.88 0 8.59-.46a2.78 2.78 0 001.95-1.96A29 29 0 0023 12a29 29 0 00-.46-5.58zM9.75 15.02V8.98L16 12l-6.25 3.02z"/></svg></span>
+          <span>YouTube 频道</span>
+        </a>
         <% const settingsActive = typeof currentPath !== 'undefined' && currentPath.startsWith('/settings'); %>
         <a href="/settings" class="nav-item <%= settingsActive ? 'active' : '' %>">
           <span class="nav-icon"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3" stroke-width="1.8"/></svg></span>

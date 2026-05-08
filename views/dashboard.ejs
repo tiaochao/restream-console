@@ -1,4 +1,4 @@
-<div>
+<div class="dashboard-page" style="width:100%;">
   <div class="page-header">
     <div>
       <div class="page-title">状态面板</div>
@@ -13,7 +13,8 @@
   <div id="stats-container"
     hx-get="/dashboard/stats"
     hx-trigger="every 15s"
-    hx-swap="innerHTML">
+    hx-swap="innerHTML"
+    style="display:block;width:100%;max-width:none;margin-left:0;">
     <%- include('partials/stats', { stats, tasks }) %>
   </div>
 </div>

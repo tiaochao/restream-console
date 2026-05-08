@@ -26,6 +26,8 @@
             <th>平台</th>
             <th>RTMP 地址</th>
             <th>推流密钥</th>
+            <th>默认 VPS</th>
+            <th>YouTube 频道</th>
             <th>备注</th>
             <th>操作</th>
           </tr>
@@ -33,7 +35,7 @@
         <tbody>
           <% if (keys.length === 0) { %>
             <tr>
-              <td colspan="6" style="text-align:center;padding:40px 16px;color:var(--text-3);">
+              <td colspan="8" style="text-align:center;padding:40px 16px;color:var(--text-2);">
                 暂无推流码，点击右上角添加
               </td>
             </tr>
@@ -59,9 +61,32 @@
                   <span class="key-masked"><%= k.stream_key.substring(0, 4) %>****</span>
                 </span>
               </td>
-              <td style="color:var(--text-3);font-size:13px;"><%= k.notes || '--' %></td>
+              <td style="color:var(--text-2);font-size:13px;"><%= k.default_vps_name || '--' %></td>
+              <td style="font-size:12px;max-width:180px;">
+                <% if (k.yt_channel_title) { %>
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <% if (k.yt_channel_thumbnail) { %>
+                      <img src="<%= k.yt_channel_thumbnail %>" alt="" style="width:20px;height:20px;border-radius:50%;object-fit:cover;flex-shrink:0;">
+                    <% } %>
+                    <a href="https://www.youtube.com/channel/<%= k.yt_channel_channel_id %>" target="_blank" class="link" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;" title="<%= k.yt_channel_title %>">
+                      <%= k.yt_channel_title %>
+                    </a>
+                  </div>
+                  <% if (k.youtube_url) { %>
+                    <div style="margin-top:2px;color:var(--text-3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<%= k.youtube_url %>">覆盖: <%= k.youtube_url %></div>
+                  <% } %>
+                <% } else if (k.youtube_url) { %>
+                  <a href="<%= k.youtube_url %>" target="_blank" class="link" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<%= k.youtube_url %>"><%= k.youtube_url %></a>
+                <% } else { %>
+                  <span style="color:var(--text-3);">--</span>
+                <% } %>
+              </td>
+              <td style="color:var(--text-2);font-size:13px;"><%= k.notes || '--' %></td>
               <td>
                 <div style="display:flex;align-items:center;gap:8px;">
+                  <button onclick="openEditKey(<%= k.id %>)" class="btn btn-ghost btn-sm">
+                    编辑
+                  </button>
                   <button onclick="verifyKey(<%= k.id %>, this)" class="btn btn-secondary btn-sm">
                     校验
                   </button>
@@ -75,6 +100,78 @@
           <% }); %>
         </tbody>
       </table>
+    </div>
+  </div>
+</div>
+
+<!-- 编辑推流码弹窗 -->
+<div id="edit-modal" class="modal-overlay hidden">
+  <div class="modal" style="max-width:520px;width:100%;">
+    <div class="modal-header">
+      <div class="modal-title">编辑推流码</div>
+      <button class="modal-close" onclick="document.getElementById('edit-modal').classList.add('hidden')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="stack">
+        <input type="hidden" id="edit-id">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+          <div>
+            <label class="form-label">名称 *</label>
+            <input id="edit-name" required class="form-input">
+          </div>
+          <div>
+            <label class="form-label">平台</label>
+            <select id="edit-platform" onchange="setEditSkRtmp(this.value);toggleEditYtChannel(this.value)" class="form-select">
+              <option value="youtube">YouTube</option>
+              <option value="tiktok">TikTok / 抖音</option>
+              <option value="custom">自定义</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="form-label">RTMP 推流地址 *</label>
+          <input id="edit-rtmp-url" required class="form-input" style="font-family:monospace;">
+          <div class="form-hint">不含密钥部分</div>
+        </div>
+        <div>
+          <label class="form-label">推流密钥 *</label>
+          <input id="edit-stream-key" required class="form-input" style="font-family:monospace;">
+        </div>
+        <div>
+          <label class="form-label">默认 VPS</label>
+          <select id="edit-default-vps-id" class="form-select">
+            <option value="">-- 不绑定 --</option>
+            <% vpsList.forEach(function(v) { %>
+              <option value="<%= v.id %>"><%= v.name %></option>
+            <% }); %>
+          </select>
+        </div>
+        <div id="edit-yt-channel-row">
+          <label class="form-label">YouTube 频道</label>
+          <select id="edit-youtube-channel-id" class="form-select">
+            <option value="">-- 不绑定频道 --</option>
+            <% ytChannels.forEach(function(ch) { %>
+              <option value="<%= ch.id %>"><%= ch.title || ch.channel_id %><%= ch.handle ? ' (' + ch.handle + ')' : '' %></option>
+            <% }); %>
+          </select>
+          <div class="form-hint">选择频道后自动检测该频道直播状态，无需手填链接。</div>
+        </div>
+        <div id="edit-yt-url-row">
+          <label class="form-label">频道链接<span style="font-weight:normal;color:var(--text-3);margin-left:4px;">（未绑定频道时填写）</span></label>
+          <input id="edit-youtube-url" placeholder="https://www.youtube.com/@handle 或 /channel/UCxxxxxx" class="form-input">
+          <div class="form-hint" style="color:var(--warning,#f59e0b);">⚠ 填频道链接，不要填具体直播间链接（watch?v=）—— 频道链接能持续检测每场直播，视频链接仅限当场。</div>
+        </div>
+        <div>
+          <label class="form-label">备注</label>
+          <input id="edit-notes" placeholder="可选，如：主频道 #1" class="form-input">
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:12px;padding-top:4px;">
+          <button type="button" onclick="document.getElementById('edit-modal').classList.add('hidden')" class="btn btn-secondary">
+            取消
+          </button>
+          <button type="button" onclick="saveEditKey(this)" class="btn btn-primary">保存修改</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -96,7 +193,7 @@
           </div>
           <div>
             <label class="form-label">平台</label>
-            <select name="platform" id="sk-platform" onchange="setSkRtmp(this.value)" class="form-select">
+            <select name="platform" id="sk-platform" onchange="setSkRtmp(this.value);toggleAddYtChannel(this.value)" class="form-select">
               <option value="youtube">YouTube</option>
               <option value="tiktok">TikTok / 抖音</option>
               <option value="custom">自定义</option>
@@ -112,6 +209,35 @@
         <div>
           <label class="form-label">推流密钥 *</label>
           <input name="stream_key" required placeholder="xxxx-xxxx-xxxx-xxxx" class="form-input" style="font-family:monospace;">
+        </div>
+        <div>
+          <label class="form-label">默认 VPS</label>
+          <select name="default_vps_id" class="form-select">
+            <option value="">-- 不绑定 --</option>
+            <% vpsList.forEach(function(v) { %>
+              <option value="<%= v.id %>"><%= v.name %></option>
+            <% }); %>
+          </select>
+          <div class="form-hint">建议绑定实际执行这路频道的 VPS，后续选择该推流码时会自动定位对应频道文件。</div>
+        </div>
+        <div id="add-yt-channel-row">
+          <label class="form-label">YouTube 频道</label>
+          <select name="youtube_channel_id" class="form-select">
+            <option value="">-- 不绑定频道 --</option>
+            <% ytChannels.forEach(function(ch) { %>
+              <option value="<%= ch.id %>"><%= ch.title || ch.channel_id %><%= ch.handle ? ' (' + ch.handle + ')' : '' %></option>
+            <% }); %>
+          </select>
+          <% if (!ytChannels.length) { %>
+            <div class="form-hint">先到「YouTube 频道」页面添加频道，再回来绑定。</div>
+          <% } else { %>
+            <div class="form-hint">选择频道后自动检测该频道直播状态，无需手填链接。</div>
+          <% } %>
+        </div>
+        <div id="add-yt-url-row">
+          <label class="form-label">频道链接<span style="font-weight:normal;color:var(--text-3);margin-left:4px;">（未绑定频道时填写）</span></label>
+          <input name="youtube_url" placeholder="https://www.youtube.com/@handle 或 /channel/UCxxxxxx" class="form-input">
+          <div class="form-hint" style="color:var(--warning,#f59e0b);">⚠ 填频道链接，不要填具体直播间链接（watch?v=）—— 频道链接能持续检测每场直播，视频链接仅限当场。</div>
         </div>
         <div>
           <label class="form-label">备注</label>
@@ -152,6 +278,7 @@
 
 <script>
 const _csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+const STREAM_KEYS = <%- JSON.stringify(keys).replace(/<\/script>/gi, '<\\/script>') %>;
 
 const SK_RTMP_MAP = {
   youtube: 'rtmp://a.rtmp.youtube.com/live2',
@@ -160,6 +287,70 @@ const SK_RTMP_MAP = {
 };
 function setSkRtmp(p) {
   if (p !== 'custom') document.getElementById('sk-rtmp-url').value = SK_RTMP_MAP[p] || '';
+}
+function setEditSkRtmp(p) {
+  if (p !== 'custom') document.getElementById('edit-rtmp-url').value = SK_RTMP_MAP[p] || '';
+}
+function toggleAddYtChannel(p) {
+  const show = p === 'youtube';
+  document.getElementById('add-yt-channel-row').style.display = show ? '' : 'none';
+  document.getElementById('add-yt-url-row').style.display = show ? '' : 'none';
+}
+function toggleEditYtChannel(p) {
+  const show = p === 'youtube';
+  document.getElementById('edit-yt-channel-row').style.display = show ? '' : 'none';
+  document.getElementById('edit-yt-url-row').style.display = show ? '' : 'none';
+}
+
+function openEditKey(id) {
+  const key = STREAM_KEYS.find(k => k.id === id);
+  if (!key) return;
+  document.getElementById('edit-id').value = key.id;
+  document.getElementById('edit-name').value = key.name || '';
+  document.getElementById('edit-platform').value = key.platform || 'youtube';
+  document.getElementById('edit-rtmp-url').value = key.rtmp_url || '';
+  document.getElementById('edit-stream-key').value = key.stream_key || '';
+  document.getElementById('edit-default-vps-id').value = key.default_vps_id || '';
+  document.getElementById('edit-youtube-channel-id').value = key.youtube_channel_id || '';
+  document.getElementById('edit-youtube-url').value = key.youtube_url || '';
+  document.getElementById('edit-notes').value = key.notes || '';
+  toggleEditYtChannel(key.platform || 'youtube');
+  document.getElementById('edit-modal').classList.remove('hidden');
+}
+
+async function saveEditKey(btn) {
+  const id = document.getElementById('edit-id').value;
+  const body = {
+    name: document.getElementById('edit-name').value,
+    platform: document.getElementById('edit-platform').value,
+    rtmp_url: document.getElementById('edit-rtmp-url').value,
+    stream_key: document.getElementById('edit-stream-key').value,
+    default_vps_id: document.getElementById('edit-default-vps-id').value,
+    youtube_channel_id: document.getElementById('edit-youtube-channel-id').value,
+    youtube_url: document.getElementById('edit-youtube-url').value,
+    notes: document.getElementById('edit-notes').value,
+  };
+  const orig = btn.textContent;
+  btn.textContent = '保存中...';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/stream-keys/' + id + '/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-csrf-token': _csrf },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    showToast(d.msg, d.ok ? 'success' : 'error');
+    if (d.ok) {
+      document.getElementById('edit-modal').classList.add('hidden');
+      setTimeout(() => location.reload(), 700);
+      return;
+    }
+  } catch (e) {
+    showToast('请求失败：' + e.message, 'error');
+  }
+  btn.textContent = orig;
+  btn.disabled = false;
 }
 
 function toggleKey(el) {
@@ -189,7 +380,10 @@ async function verifyKey(id, btn) {
   document.getElementById('verify-modal').classList.remove('hidden');
 
   try {
-    const r = await fetch('/stream-keys/' + id + '/verify', { method: 'POST' });
+    const r = await fetch('/stream-keys/' + id + '/verify', {
+      method: 'POST',
+      headers: { 'x-csrf-token': _csrf },
+    });
     const d = await r.json();
     if (d.ok) {
       statusEl.textContent = '✓ ' + d.msg;

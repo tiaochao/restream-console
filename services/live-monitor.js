@@ -1,5 +1,5 @@
 const db = require('../db');
-const { getSetting } = require('../db');
+const { getSetting, defaultUserId } = require('../db');
 const sshService = require('./ssh');
 const taskManager = require('./task-manager');
 const platformApi = require('./platform-api');
@@ -153,7 +153,8 @@ async function checkAndUpdate(channel) {
 }
 
 function startLiveMonitor() {
-  const intervalMin = parseInt(getSetting('monitor_interval') || '5');
+  // TODO(Phase 6): 重构为每用户独立定时器，当前使用 admin 配置作为全局轮询间隔
+  const intervalMin = parseInt(getSetting('monitor_interval', defaultUserId) || '5');
   const interval = intervalMin * 60 * 1000;
   let scanning = false;
 

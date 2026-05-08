@@ -58,8 +58,21 @@ async function startTask(taskId, userId = null) {
     ${userId ? 'AND t.user_id = ?' : ''}
   `).get(...(userId ? [taskId, userId] : [taskId]));
 
-  if (!task)          throw new Error('任务不存在');
-  if (!task.vps_id)   throw new Error('任务未绑定 VPS');
+  if (!task) throw new Error('任务不存在');
+
+  // [FEAT-01] vps_id 为 NULL 时调用调度器动态分配
+  let scheduledVps = null;
+  if (!task.vps_id) {
+    const { selectBestVps } = require('./vps-scheduler');
+    scheduledVps = selectBestVps(task.user_id);
+    if (!scheduledVps) {
+      throw new Error('无可用在线 VPS：所有节点均离线或已达任务上限，请在 VPS 管理页面检查连接状态');
+    }
+    task.vps_id = scheduledVps.id;
+    task.vid    = scheduledVps.id;
+    console.log(`[调度器] 任务 ${taskId} 自动分配到 VPS: ${scheduledVps.name}(${scheduledVps.id})`);
+  }
+
   if (task.status === 'running') throw new Error('任务已在运行');
 
   // 检查 VPS 任务上限
@@ -144,6 +157,12 @@ async function startTask(taskId, userId = null) {
         started_at=datetime('now'), last_active_at=datetime('now'), stall_count=0, block_count=0
     WHERE id=?
   `).run(pid, logFile, taskId);
+
+  // [FEAT-01] 调度器分配后写回 vps_id（health check 依赖此字段，必须在 return 前完成）
+  if (scheduledVps) {
+    db.prepare('UPDATE tasks SET vps_id=? WHERE id=?').run(scheduledVps.id, taskId);
+    writeEvent(taskId, task.user_id, task.status, 'running', `scheduler:${scheduledVps.name}(${scheduledVps.id})`);
+  }
 
   return pid;
 }

@@ -19,6 +19,13 @@
 3. 修复 `live-monitor.js` 第 156 行 `getSetting('monitor_interval')` 补传 `userId` 参数（BUG-03）
 4. 将 `buildCommand()` 生成的 bash 脚本改为写出结构化 JSON 状态文件（`/tmp/restream_N.status`），`checkHealth()` 改为解析该 JSON 而非正则匹配日志文本（BUG-04）
 
+**执行计划：**
+| Plan | Wave | 覆盖 Bug | 文件 | 说明 |
+|------|------|----------|------|------|
+| [01-01-PLAN.md](phases/01-critical-bug-fixes/01-01-PLAN.md) | 1 | BUG-01, BUG-03 | db.js, live-monitor.js | 两个单行修复：删除 DELETE 语句 + 补传 userId |
+| [01-02-PLAN.md](phases/01-critical-bug-fixes/01-02-PLAN.md) | 1 | BUG-02 | task-manager.js | AbortSignal 30s 超时保护 startTaskQueued |
+| [01-03-PLAN.md](phases/01-critical-bug-fixes/01-03-PLAN.md) | 2 | BUG-04 | task-manager.js | JSON 状态文件替换正则日志解析 |
+
 **Success Criteria:**
 1. 重启应用后，`source_channels` 表中全部频道记录仍然存在，`auto_start`、`auto_vps_id` 等配置不丢失
 2. 将一个 VPS 的 SSH 连接故意设为无响应时，其余任务的自动重启在 60s 内正常触发，不被阻塞

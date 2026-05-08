@@ -17,6 +17,15 @@ if (isProduction && !process.env.SESSION_SECRET) {
   throw new Error('SESSION_SECRET is required in production');
 }
 
+const _encKey = process.env.ENCRYPTION_KEY || '';
+if (!_encKey || _encKey.length !== 64 || !/^[0-9a-f]+$/i.test(_encKey)) {
+  if (isProduction) {
+    throw new Error('ENCRYPTION_KEY is required in production (generate: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))")');
+  } else if (_encKey) {
+    console.warn('[security] ENCRYPTION_KEY 格式错误（需 64 位 hex）—— 在开发环境中忽略，生产环境将启动失败');
+  }
+}
+
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(ejsLayouts);

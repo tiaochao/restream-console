@@ -62,6 +62,15 @@ app.use('/admin', requireAuth, requireAdmin, require('./routes/admin'));
 
 app.get('/', (req, res) => res.redirect('/dashboard'));
 
+app.use((err, req, res, next) => {
+  const status = err.status || err.statusCode || 500;
+  console.error(`[ERROR] ${req.method} ${req.path}:`, err.message, err.stack ? err.stack.split('\n')[1] : '');
+  if (req.xhr || (req.headers.accept || '').includes('application/json')) {
+    return res.status(status).json({ error: isProduction ? '服务器内部错误' : err.message });
+  }
+  res.status(status).send(isProduction ? '<h1>服务器内部错误</h1>' : `<pre>${err.message}\n${err.stack || ''}</pre>`);
+});
+
 const PORT = process.env.PORT || 3000;
 const server = app.listen(PORT, () => {
   console.log(`转推控制台运行在 http://localhost:${PORT}`);

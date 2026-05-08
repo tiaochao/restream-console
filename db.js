@@ -152,6 +152,17 @@ db.exec(`
     fetched_at TEXT DEFAULT (datetime('now')),
     UNIQUE(user_id, video_id)
   );
+
+  CREATE TABLE IF NOT EXISTS task_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    from_status TEXT,
+    to_status TEXT NOT NULL,
+    reason TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id, created_at DESC);
 `);
 
 function hashPassword(password) {
@@ -275,6 +286,15 @@ function ensureDefaultSettings(userId) {
 
 db.prepare('SELECT id FROM users').all().forEach(user => ensureDefaultSettings(user.id));
 
+function writeEvent(taskId, userId, fromStatus, toStatus, reason) {
+  try {
+    db.prepare('INSERT INTO task_events (task_id, user_id, from_status, to_status, reason) VALUES (?, ?, ?, ?, ?)')
+      .run(taskId, userId, fromStatus || null, toStatus, reason || null);
+  } catch (e) {
+    console.warn('[task_events] write failed:', e.message);
+  }
+}
+
 function getSetting(key, userId = defaultUserId) {
   return db.prepare('SELECT value FROM settings WHERE user_id = ? AND key = ?').get(userId, key)?.value;
 }
@@ -295,3 +315,4 @@ module.exports.ensureDefaultSettings = ensureDefaultSettings;
 module.exports.hashPassword = hashPassword;
 module.exports.verifyPassword = verifyPassword;
 module.exports.defaultUserId = defaultUserId;
+module.exports.writeEvent = writeEvent;

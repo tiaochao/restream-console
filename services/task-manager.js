@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { decrypt } = require('./crypto');
 const notifier = require('./notifier');
+const { writeEvent } = require('../db');
 
 const PLATFORM_RTMP = {
   youtube: 'rtmp://a.rtmp.youtube.com/live2',
@@ -587,6 +588,7 @@ function startTaskQueued(taskId, userId = null) {
         taskName: String(taskId),
         message: `任务 ${taskId} 启动失败：${e.message}`,
       }).catch(() => {});
+      writeEvent(taskId, userId, null, 'error', `start_failed: ${e.message}`);
     }
     const delay = parseInt(getSetting('start_delay', userId || undefined) || '5') * 1000;
     await new Promise(r => setTimeout(r, delay));
@@ -601,6 +603,10 @@ function _notify(task, type, message) {
     taskName: task.name || String(task.id),
     message,
   }).catch(() => {});
+}
+
+function _record(task, fromStatus, toStatus, reason) {
+  writeEvent(task.id, task.user_id, fromStatus, toStatus, reason);
 }
 
 async function stopTask(taskId, userId = null) {
@@ -711,9 +717,11 @@ async function checkHealth(task) {
         db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
         startTaskQueued(task.id, task.user_id).catch(() => {});
         _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
+        _record(task, task.status, 'restarting', 'auto_restart');
       } else if (task.status !== 'stalled') {
         db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
         _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
+        _record(task, task.status, 'stalled', 'stream_stalled');
       }
       return;
     }
@@ -750,6 +758,7 @@ async function checkHealth(task) {
           db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
           startTaskQueued(task.id, task.user_id).catch(() => {});
           _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
+          _record(task, task.status, 'restarting', 'auto_restart');
         } else {
           await stopTask(task.id, task.user_id).catch(() => {});
           db.prepare("UPDATE tasks SET status='target_lost', remote_pid=NULL WHERE id=?").run(task.id);
@@ -770,13 +779,16 @@ async function checkHealth(task) {
           db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
           startTaskQueued(task.id, task.user_id).catch(() => {});
           _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
+          _record(task, task.status, 'restarting', 'auto_restart');
         } else {
           db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
           _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
+          _record(task, task.status, 'stalled', 'stream_stalled');
         }
       } else if (task.status !== 'stalled') {
         db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
         _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
+        _record(task, task.status, 'stalled', 'stream_stalled');
       }
       return;
     }
@@ -796,6 +808,7 @@ async function checkHealth(task) {
         if (task.status !== 'stalled') {
           db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
           _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
+          _record(task, task.status, 'stalled', 'stream_stalled');
         }
         return;
       }
@@ -836,17 +849,20 @@ async function checkHealth(task) {
           db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
           startTaskQueued(task.id, task.user_id).catch(() => {});
           _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
+          _record(task, task.status, 'restarting', 'auto_restart');
         } else {
           console.error(`[健康监控] 任务 ${task.id} RTMP 持续报错，自动停止`);
           await stopTask(task.id, task.user_id).catch(() => {});
           db.prepare("UPDATE tasks SET status='error', remote_pid=NULL WHERE id=?").run(task.id);
           _notify(task, 'task_error', `任务 ${task.name || task.id} 已停止（进程死亡，无自动重启）`);
+          _record(task, task.status, 'error', 'process_died');
         }
         return;
       }
       if (task.status !== 'stalled') {
         db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
         _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
+        _record(task, task.status, 'stalled', 'stream_stalled');
       }
       return;
     }
@@ -858,9 +874,11 @@ async function checkHealth(task) {
         db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
         startTaskQueued(task.id, task.user_id).catch(() => {});
         _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
+        _record(task, task.status, 'restarting', 'auto_restart');
       } else {
         db.prepare("UPDATE tasks SET status='error', remote_pid=NULL WHERE id=?").run(task.id);
         _notify(task, 'task_error', `任务 ${task.name || task.id} 已停止（进程死亡，无自动重启）`);
+        _record(task, task.status, 'error', 'process_died');
       }
       return;
     }
@@ -878,6 +896,7 @@ async function checkHealth(task) {
         if (task.status !== 'stalled') {
           db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
           _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
+          _record(task, task.status, 'stalled', 'stream_stalled');
         }
         return;
       }
@@ -888,10 +907,12 @@ async function checkHealth(task) {
         db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
         startTaskQueued(task.id, task.user_id).catch(() => {});
         _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
+        _record(task, task.status, 'restarting', 'auto_restart');
       } else {
         await stopTask(task.id, task.user_id).catch(() => {});
         db.prepare("UPDATE tasks SET status='error', remote_pid=NULL WHERE id=?").run(task.id);
         _notify(task, 'task_error', `任务 ${task.name || task.id} 已停止（持续无日志更新，无自动重启）`);
+        _record(task, task.status, 'error', 'no_log_update');
       }
     } else if (mtime > 0) {
       // 正常运行，更新活跃时间，清零计数；若之前卡过，恢复为 running
@@ -899,6 +920,7 @@ async function checkHealth(task) {
       db.prepare(`UPDATE tasks SET last_active_at=datetime('now'), stall_count=0, block_count=0${statusPatch} WHERE id=?`).run(task.id);
       if ((task.stall_count || 0) > 0 || ['stalled', 'restarting', 'source_retrying'].includes(task.status)) {
         _notify(task, 'task_recovered', `任务 ${task.name || task.id} 已恢复正常`);
+        _record(task, task.status, 'running', 'recovered');
       }
     }
   } catch (_) {

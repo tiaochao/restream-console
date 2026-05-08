@@ -1,6 +1,21 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { getSetting } = require('../db');
+
+function getApiKeyHealth(userId) {
+  function parseKeys(raw) {
+    return (raw || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+  }
+  const pooled = parseKeys(getSetting('youtube_api_keys', userId));
+  const legacy = parseKeys(getSetting('youtube_api_key', userId));
+  const keys = [...new Set([...pooled, ...legacy])];
+  const statusMap = JSON.parse(getSetting('youtube_api_key_status', userId) || '{}') || {};
+  const total = keys.length;
+  const quota = keys.filter(k => statusMap[k]?.status === 'quota' || statusMap[k]?.status === 'rate_limited').length;
+  const invalid = keys.filter(k => ['invalid', 'forbidden'].includes(statusMap[k]?.status)).length;
+  return { total, active: Math.max(0, total - quota - invalid), quota, invalid };
+}
 
 function getStats(userId) {
   const totalVps = db.prepare('SELECT COUNT(*) as n FROM vps WHERE user_id=?').get(userId).n;
@@ -9,7 +24,8 @@ function getStats(userId) {
   const retryingTasks = db.prepare("SELECT COUNT(*) as n FROM tasks WHERE user_id=? AND status='source_retrying'").get(userId).n;
   const errorTasks = db.prepare("SELECT COUNT(*) as n FROM tasks WHERE user_id=? AND status IN ('error','stalled','target_lost','blocked')").get(userId).n;
   const totalTasks = db.prepare('SELECT COUNT(*) as n FROM tasks WHERE user_id=?').get(userId).n;
-  return { totalVps, onlineVps, runningTasks, retryingTasks, errorTasks, totalTasks };
+  const apiKeyHealth = getApiKeyHealth(userId);
+  return { totalVps, onlineVps, runningTasks, retryingTasks, errorTasks, totalTasks, apiKeyHealth };
 }
 
 function getRecentTasks(userId) {

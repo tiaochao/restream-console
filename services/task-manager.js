@@ -595,7 +595,7 @@ async function stopTask(taskId, userId = null) {
   if (task.remote_pid && task.vps_id) {
     await sshService.exec(
       task.vps_id,
-      `pkill -P ${task.remote_pid} 2>/dev/null; kill ${task.remote_pid} 2>/dev/null; true`,
+      `pkill -P ${task.remote_pid} 2>/dev/null; kill ${task.remote_pid} 2>/dev/null; rm -f /tmp/dy_ck_${taskId}.txt 2>/dev/null; true`,
       task.user_id
     ).catch(() => {});
     await new Promise(r => setTimeout(r, 700));

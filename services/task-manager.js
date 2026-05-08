@@ -1,4 +1,4 @@
-const db = require('../db');
+﻿const db = require('../db');
 const { getSetting } = require('../db');
 const sshService = require('./ssh');
 const { resolveDouyinStreamUrl } = require('./platform-api');
@@ -19,8 +19,9 @@ const {
   LEGACY_RECORD_DIR,
   AUTO_RECORDING_PREFIX,
 } = require('./ffmpeg-args');
-const { dqEsc, shSingleQuote } = require('../utils/shell-escape');
+const { shSingleQuote } = require('../utils/shell-escape');
 const { syncDouyinHelper, ensureRemoteRuntime, syncAutoRecordingMediaFile } = require('./task-ssh');
+const { buildHealthCheckCmd, parseHealthResult, evaluateHealth } = require('./task-state');
 
 const PLATFORM_RTMP = {
   youtube: 'rtmp://a.rtmp.youtube.com/live2',
@@ -213,295 +214,50 @@ async function checkHealth(task) {
   try {
     await syncAutoRecordingMediaFile(task).catch(() => {});
 
-    // 一次 SSH 同时检查进程存活 + 日志 mtime + 状态文件 + RTMP 连接
-    const cmd = [
-      `kill -0 ${task.remote_pid} 2>/dev/null && echo alive || echo dead`,
-      `stat -c %Y ${task.log_file} 2>/dev/null || echo 0`,
-      `cat /tmp/restream_${task.id}.status 2>/dev/null || echo '{}'`,
-      `if ! command -v ss >/dev/null 2>&1; then echo rtmp_unknown; else _RTMP_HIT=0; _PIDS="${task.remote_pid}"; _SID=$(ps -o sid= -p ${task.remote_pid} 2>/dev/null | tr -d ' '); if [ -n "$_SID" ]; then _PIDS="$(ps -o pid= -g "$_SID" 2>/dev/null | tr '\\n' ' ')"; elif command -v pgrep >/dev/null 2>&1; then _SCAN="${task.remote_pid}"; while [ -n "$_SCAN" ]; do _NEXT=""; for _PP in $_SCAN; do for _CP in $(pgrep -P "$_PP" 2>/dev/null); do _PIDS="$_PIDS $_CP"; _NEXT="$_NEXT $_CP"; done; done; _SCAN="$_NEXT"; done; fi; for _P in $_PIDS; do ss -tnp 2>/dev/null | grep -E ':(1935|443) ' | grep -q "pid=$_P," && _RTMP_HIT=1; done; [ "$_RTMP_HIT" = "1" ] && echo rtmp_connected || echo no_rtmp; fi`,
-    ].join('; ');
-
+    const cmd = buildHealthCheckCmd(task);
     const result = await sshService.exec(task.vps_id, cmd, task.user_id);
-    const lines = result.stdout.trim().split('\n');
-    const procStatus = lines[0]?.trim();
-    const mtime = parseInt(lines[1]?.trim() || '0');
-    const rtmpStatus = lines[3]?.trim() || 'rtmp_unknown';
     const now = Math.floor(Date.now() / 1000);
-    const stale = mtime > 0 && (now - mtime) > stallTimeout;
+    const sshLines = result.stdout.trim().split('\n');
+    const parsed = parseHealthResult(task, sshLines, now, stallTimeout);
+    const effect = evaluateHealth(task, parsed, { blockLimit });
 
-    // 解析 JSON 状态文件（由 bash 脚本的 _write_status 函数写出）
-    let statusJson = {};
-    try {
-      const raw = (lines[2] || '{}').trim();
-      statusJson = JSON.parse(raw);
-    } catch (_) {
-      // 状态文件不存在或格式错误，降级为空对象，后续判断使用默认值
+    if (effect.logMsg) console.log(effect.logMsg);
+    if (effect.newStallCount !== null) {
+      db.prepare('UPDATE tasks SET stall_count=? WHERE id=?').run(effect.newStallCount, task.id);
     }
-    const jsState       = statusJson.state     || 'unknown';   // streaming|source_retry|source_offline|fallback|target_lost|idle|expired
-    const jsSource      = statusJson.source    || 'unknown';   // live|retry|offline|unknown
-    const jsTarget      = statusJson.target    || 'unknown';   // connected|lost|unknown
-    const jsFallback    = statusJson.fallback  === true;       // boolean
-
-    // === 基于 JSON 状态文件的健康判断（替代正则文本解析）===
-
-    // 兜底录播：脚本报告 fallback 状态
-    const isFallbackActive = jsFallback === true || jsState === 'fallback';
-
-    // 直播源重试：无法获取直链
-    const isRetryLoop      = jsState === 'source_retry' || jsSource === 'retry';
-
-    // 直播源明确离线（404/not live 类）
-    const isSourceOffline  = jsSource === 'offline' || jsState === 'source_offline';
-    const isSourceUnavailable = isSourceOffline;
-
-    // 目标 RTMP 断开
-    const isTargetLost     = jsState === 'target_lost' || jsTarget === 'lost';
-
-    // 直链过期（URL expire 时间戳临近）
-    const isExpiredDirectUrl = jsState === 'expired';
-
-    // ffmpeg 无流输出（状态文件首次创建前或脚本未能写出）
-    const isFfmpegNoStreamError = jsState === 'idle' && procStatus !== 'dead' && mtime > 0 && (now - mtime) < 30;
-
-    // 是否为直播类源
-    const isLiveSource = !task.source_url.startsWith('/') &&
-      /douyin\.com|live\.bilibili\.com|live\.kuaishou\.com|kuaishou\.com\/short-video/i.test(task.source_url);
-
-    // RTMP 连接状态（来自 ss 命令，与之前相同）
-    const expectsRtmp1935   = /^rtmp:\/\//i.test(String(task.rtmp_url || ''));
-    const isYoutubeRtmpMissing = isYoutubeTarget(task) && expectsRtmp1935 && procStatus !== 'dead' && rtmpStatus === 'no_rtmp';
-    const isTargetStatus    = task.status === 'target_lost';
-
-    // 验证码/封锁检测：JSON 状态文件中无法检测，降级为保守值（不触发 block 逻辑）
-    // TODO(Phase 5): 可在状态文件中添加 blocked 字段
-    const isBlocked = false;
-
-    // RTMP 推流错误：从 JSON target 字段判断
-    const isRtmpError = jsTarget === 'lost' && procStatus !== 'dead' && !jsFallback;
-
-    // 空流输出（无音视频流）：从状态文件无法直接检测，保留为 false
-    // 此场景在 streaming 状态下 mtime 会停止更新，stale 逻辑会捕获
-    const hasHealthyFrameAfterErrors = jsState === 'streaming';
-
-    if (procStatus !== 'dead' && isFfmpegNoStreamError && !hasHealthyFrameAfterErrors) {
-      const newStallCount = (task.stall_count || 0) + 1;
-      console.warn(`[health] task ${task.id} ffmpeg output has no streams, restarting to rebuild command, stall=${newStallCount}`);
-      db.prepare('UPDATE tasks SET stall_count=? WHERE id=?').run(newStallCount, task.id);
-
-      if (newStallCount >= 1) {
-        await stopTask(task.id, task.user_id).catch(() => {});
-        db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
-        startTaskQueued(task.id, task.user_id).catch(() => {});
-        _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
-        _record(task, task.status, 'restarting', 'auto_restart');
-      } else if (task.status !== 'stalled') {
-        db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
-        _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
-        _record(task, task.status, 'stalled', 'stream_stalled');
-      }
-      return;
+    if (effect.newBlockCount !== null) {
+      db.prepare('UPDATE tasks SET block_count=? WHERE id=?').run(effect.newBlockCount, task.id);
     }
-
-    if (procStatus !== 'dead' && isExpiredDirectUrl && isLiveSource) {
-      const newStallCount = (task.stall_count || 0) + 1;
-      console.log(`[health] task ${task.id} source direct url expired, stall=${newStallCount}`);
-      db.prepare('UPDATE tasks SET stall_count=? WHERE id=?').run(newStallCount, task.id);
-
-      if (isFallbackActive) {
-        db.prepare("UPDATE tasks SET status='running', last_active_at=datetime('now') WHERE id=?").run(task.id);
-        return;
-      }
-
-      db.prepare("UPDATE tasks SET status='source_retrying' WHERE id=?").run(task.id);
-      return;
-    }
-
-    if (procStatus !== 'dead' && isRetryLoop && isLiveSource) {
-      const newStallCount = (task.stall_count || 0) + 1;
-      console.log(`[健康监控] 任务 ${task.id} 正在重试解析直播源，stall=${newStallCount}`);
-      db.prepare("UPDATE tasks SET status='source_retrying', stall_count=? WHERE id=?").run(newStallCount, task.id);
-      return;
-    }
-
-    if (isTargetLost || isTargetStatus) {
-      const newStallCount = (task.stall_count || 0) + 1;
-      console.warn(`[health] task ${task.id} target RTMP disconnected, stall=${newStallCount}`);
-      db.prepare('UPDATE tasks SET status=?, stall_count=? WHERE id=?').run('target_lost', newStallCount, task.id);
-
-      if (newStallCount >= 2 || isTargetStatus) {
-        if (task.auto_restart) {
-          await stopTask(task.id, task.user_id).catch(() => {});
-          db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
-          startTaskQueued(task.id, task.user_id).catch(() => {});
-          _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
-          _record(task, task.status, 'restarting', 'auto_restart');
-        } else {
-          await stopTask(task.id, task.user_id).catch(() => {});
-          db.prepare("UPDATE tasks SET status='target_lost', remote_pid=NULL WHERE id=?").run(task.id);
-        }
-      }
-      return;
-    }
-
-    if (isYoutubeRtmpMissing && !isRetryLoop && !isExpiredDirectUrl && !isSourceUnavailable) {
-      const newStallCount = (task.stall_count || 0) + 1;
-      console.warn(`[健康监控] 任务 ${task.id} 未检测到 YouTube RTMP 连接，stall=${newStallCount}`);
-      db.prepare('UPDATE tasks SET stall_count=? WHERE id=?').run(newStallCount, task.id);
-
-      if (newStallCount >= 2) {
-        if (task.auto_restart) {
-          console.log(`[健康监控] 任务 ${task.id} YouTube RTMP 连接丢失，自动重启`);
-          await stopTask(task.id, task.user_id).catch(() => {});
-          db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
-          startTaskQueued(task.id, task.user_id).catch(() => {});
-          _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
-          _record(task, task.status, 'restarting', 'auto_restart');
-        } else {
-          db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
-          _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
-          _record(task, task.status, 'stalled', 'stream_stalled');
-        }
-      } else if (task.status !== 'stalled') {
-        db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
-        _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
-        _record(task, task.status, 'stalled', 'stream_stalled');
-      }
-      return;
-    }
-
-    // 直播源已不可用时，优先按“源结束/未开播”处理，避免把脚本重试误显示为推流中。
-    if (procStatus !== 'dead' && isSourceUnavailable && isLiveSource) {
-      const newStallCount = (task.stall_count || 0) + 1;
-      console.log(`[健康监控] 任务 ${task.id} 直播源不可用，stall=${newStallCount}`);
-      db.prepare('UPDATE tasks SET stall_count=? WHERE id=?').run(newStallCount, task.id);
-
-      if (isFallbackActive) {
-        db.prepare("UPDATE tasks SET status='running', last_active_at=datetime('now') WHERE id=?").run(task.id);
-        return;
-      }
-
-      if (!isSourceOffline || newStallCount < 2) {
-        if (task.status !== 'stalled') {
-          db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
-          _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
-          _record(task, task.status, 'stalled', 'stream_stalled');
-        }
-        return;
-      }
-
-      console.log(`[健康监控] 任务 ${task.id} 直播源持续不可用，进入等待开播`);
+    if (effect.requiresStop) {
       await stopTask(task.id, task.user_id).catch(() => {});
-      db.prepare("UPDATE tasks SET status='waiting_live', remote_pid=NULL, stall_count=0 WHERE id=?").run(task.id);
-      return;
     }
-
-    // 检测抖音验证码特征词（streamlink 报错时会出现）
-    // 验证码/封锁检测：JSON 状态文件中无法检测，降级为保守值（不触发 block 逻辑）
-    // TODO(Phase 5): 可在状态文件中添加 blocked 字段
-    if (isBlocked) {
-      const newBlockCount = (task.block_count || 0) + 1;
-      console.warn(`[健康监控] 任务 ${task.id} 检测到验证码/封锁，block_count=${newBlockCount}`);
-      db.prepare('UPDATE tasks SET block_count=? WHERE id=?').run(newBlockCount, task.id);
-
-      if (newBlockCount >= blockLimit) {
-        console.error(`[健康监控] 任务 ${task.id} 连续 ${newBlockCount} 次被封，自动停止（IP 可能被封）`);
-        await stopTask(task.id, task.user_id).catch(() => {});
-        db.prepare("UPDATE tasks SET status='blocked', remote_pid=NULL WHERE id=?").run(task.id);
-        return;
-      }
-    }
-
-    // 检测 RTMP 推流目标断开（YouTube/TikTok 主动断流、推流码失效等）
-    // isRtmpError 已在 JSON 状态判断块中通过 jsTarget 字段计算
-    if (isRtmpError) {
-      const newStallCount = (task.stall_count || 0) + 1;
-      console.warn(`[健康监控] 任务 ${task.id} 检测到 RTMP 推流错误（可能目标端断流），stall=${newStallCount}`);
-      db.prepare('UPDATE tasks SET stall_count=? WHERE id=?').run(newStallCount, task.id);
-      // 允许短暂断流重试（最多 3 次 ≈ 90s），超过则停止
-      if (newStallCount >= 3) {
-        if (task.auto_restart) {
-          console.error(`[健康监控] 任务 ${task.id} RTMP 持续报错，自动重启`);
-          await stopTask(task.id, task.user_id).catch(() => {});
-          db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
-          startTaskQueued(task.id, task.user_id).catch(() => {});
-          _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
-          _record(task, task.status, 'restarting', 'auto_restart');
-        } else {
-          console.error(`[健康监控] 任务 ${task.id} RTMP 持续报错，自动停止`);
-          await stopTask(task.id, task.user_id).catch(() => {});
-          db.prepare("UPDATE tasks SET status='error', remote_pid=NULL WHERE id=?").run(task.id);
-          _notify(task, 'task_error', `任务 ${task.name || task.id} 已停止（进程死亡，无自动重启）`);
-          _record(task, task.status, 'error', 'process_died');
-        }
-        return;
-      }
-      if (task.status !== 'stalled') {
-        db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
-        _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
-        _record(task, task.status, 'stalled', 'stream_stalled');
-      }
-      return;
-    }
-
-    if (procStatus === 'dead') {
-      // 进程已死
-      if (task.auto_restart) {
-        console.log(`[健康监控] 任务 ${task.id} 进程已死，自动重启`);
-        db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
-        startTaskQueued(task.id, task.user_id).catch(() => {});
-        _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
-        _record(task, task.status, 'restarting', 'auto_restart');
-      } else {
-        db.prepare("UPDATE tasks SET status='error', remote_pid=NULL WHERE id=?").run(task.id);
-        _notify(task, 'task_error', `任务 ${task.name || task.id} 已停止（进程死亡，无自动重启）`);
-        _record(task, task.status, 'error', 'process_died');
-      }
-      return;
-    }
-
-    if (stale || isRetryLoop) {
-      const reason = stale ? `日志 ${now - mtime}s 无更新` : '无法获取直链';
-      const newStallCount = (task.stall_count || 0) + 1;
-      console.log(`[健康监控] 任务 ${task.id} ${reason}，stall=${newStallCount}`);
-      db.prepare('UPDATE tasks SET stall_count=? WHERE id=?').run(newStallCount, task.id);
-
-      // 重试循环：允许最多 10 次（≈5分钟）再处理，为短暂断播留余地
-      const retryThreshold = isRetryLoop && !stale ? 10 : 1;
-      if (newStallCount < retryThreshold) {
-        // 更新显示状态为 stalled，但暂不杀进程
-        if (task.status !== 'stalled') {
-          db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
-          _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
-          _record(task, task.status, 'stalled', 'stream_stalled');
-        }
-        return;
-      }
-
-      if (task.auto_restart) {
-        console.log(`[健康监控] 任务 ${task.id} 自动重启（${reason}）`);
-        await stopTask(task.id, task.user_id).catch(() => {});
-        db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
-        startTaskQueued(task.id, task.user_id).catch(() => {});
-        _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
-        _record(task, task.status, 'restarting', 'auto_restart');
-      } else {
-        await stopTask(task.id, task.user_id).catch(() => {});
-        db.prepare("UPDATE tasks SET status='error', remote_pid=NULL WHERE id=?").run(task.id);
-        _notify(task, 'task_error', `任务 ${task.name || task.id} 已停止（持续无日志更新，无自动重启）`);
-        _record(task, task.status, 'error', 'no_log_update');
-      }
-    } else if (mtime > 0) {
-      // 正常运行，更新活跃时间，清零计数；若之前卡过，恢复为 running
+    if (effect.requiresRestart) {
+      db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
+      startTaskQueued(task.id, task.user_id).catch(() => {});
+    } else if (effect.action === 'recover') {
       const statusPatch = ['stalled', 'source_retrying'].includes(task.status) ? ", status='running'" : '';
       db.prepare(`UPDATE tasks SET last_active_at=datetime('now'), stall_count=0, block_count=0${statusPatch} WHERE id=?`).run(task.id);
       if ((task.stall_count || 0) > 0 || ['stalled', 'restarting', 'source_retrying'].includes(task.status)) {
         _notify(task, 'task_recovered', `任务 ${task.name || task.id} 已恢复正常`);
         _record(task, task.status, 'running', 'recovered');
       }
+    } else if (effect.newStatus) {
+      if (effect.clearPid) {
+        db.prepare('UPDATE tasks SET status=?, remote_pid=NULL WHERE id=?').run(effect.newStatus, task.id);
+      } else if (effect.action === 'setRunning') {
+        db.prepare("UPDATE tasks SET status='running', last_active_at=datetime('now') WHERE id=?").run(task.id);
+      } else {
+        db.prepare('UPDATE tasks SET status=? WHERE id=?').run(effect.newStatus, task.id);
+      }
+    }
+    if (effect.notifyType) {
+      _notify(task, effect.notifyType, effect.notifyMsg || `任务 ${task.name || task.id} 状态变更`);
+    }
+    if (effect.eventReason) {
+      _record(task, task.status, effect.eventToStatus || effect.newStatus || task.status, effect.eventReason);
     }
   } catch (err) {
     logError('checkHealth', err);
-    // SSH 暂时失败，不改状态
   }
 }
 

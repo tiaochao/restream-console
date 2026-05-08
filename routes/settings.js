@@ -5,6 +5,7 @@ const { hashPassword, verifyPassword } = require('../db');
 const platformApi = require('../services/platform-api');
 const youtubeMonitor = require('../services/youtube-monitor');
 const { encrypt, decrypt } = require('../services/crypto');
+const notifier = require('../services/notifier');
 
 const TITLE = '设置 - 转推控制台';
 const MAX_COOKIE_LENGTH = 20000;
@@ -49,6 +50,9 @@ function getCfg(userId) {
     youtube_api_keys: apiKeys,
     youtube_api_key_count: normalizeYouTubeApiKeys(apiKeys).split('\n').filter(Boolean).length,
     douyin_cookies: decrypt(getSetting(userId, 'douyin_cookies') || '') || '',
+    notify_webhook_url:        getSetting(userId, 'notify_webhook_url')      || '',
+    notify_telegram_token:     getSetting(userId, 'notify_telegram_token')   || '',
+    notify_telegram_chat_id:   getSetting(userId, 'notify_telegram_chat_id') || '',
   };
 }
 
@@ -158,6 +162,30 @@ router.post('/test-youtube-api-keys', async (req, res) => {
     res.json({ ok: result.ok, msg, ...result });
   } catch (e) {
     res.status(500).json({ ok: false, msg: `检测失败：${e.message}` });
+  }
+});
+
+router.post('/notifications', (req, res) => {
+  const webhookUrl = String(req.body.notify_webhook_url || '').trim();
+  const tgToken    = String(req.body.notify_telegram_token || '').trim();
+  const tgChatId   = String(req.body.notify_telegram_chat_id || '').trim();
+
+  if (webhookUrl && !/^https?:\/\/.+/i.test(webhookUrl)) {
+    return renderSettings(req, res, { status: 400, error: 'Webhook URL 格式无效（需 http/https 开头）' });
+  }
+
+  setSetting(req.session.userId, 'notify_webhook_url',      webhookUrl);
+  setSetting(req.session.userId, 'notify_telegram_token',   tgToken);
+  setSetting(req.session.userId, 'notify_telegram_chat_id', tgChatId);
+  renderSettings(req, res, { success: '通知配置已保存' });
+});
+
+router.post('/test-notify', async (req, res) => {
+  try {
+    await notifier.test(req.session.userId);
+    res.json({ ok: true, msg: '测试通知已发送（如未收到，请检查配置和 Bot 设置）' });
+  } catch (e) {
+    res.json({ ok: false, msg: e.message });
   }
 });
 

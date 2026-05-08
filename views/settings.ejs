@@ -226,6 +226,48 @@ chmod +x /usr/local/bin/yt-dlp</pre>
   </div>
 </div>
 
+<!-- 告警通知配置 -->
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">告警通知</div>
+  </div>
+  <div class="modal-body stack">
+    <div class="alert alert-info" style="font-size:13px;">
+      任务掉线、自动重启、恢复正常等关键状态变更时自动推送告警。支持 Webhook（飞书/钉钉/企微/自定义）和 Telegram Bot 两种渠道，均可选填。
+    </div>
+    <form method="POST" action="/settings/notifications" class="stack">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <div>
+        <label class="form-label">Webhook URL</label>
+        <input type="url" name="notify_webhook_url" value="<%= cfg.notify_webhook_url %>"
+          placeholder="https://example.com/webhook（飞书/钉钉/企微/自定义）"
+          class="form-input" autocomplete="off">
+        <div class="form-hint">状态变更时向此地址 POST JSON，留空则不发送</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div>
+          <label class="form-label">Telegram Bot Token</label>
+          <input type="text" name="notify_telegram_token" value="<%= cfg.notify_telegram_token %>"
+            placeholder="123456:ABC-DEFxxx"
+            class="form-input" autocomplete="off">
+        </div>
+        <div>
+          <label class="form-label">Telegram Chat ID</label>
+          <input type="text" name="notify_telegram_chat_id" value="<%= cfg.notify_telegram_chat_id %>"
+            placeholder="数字 Chat ID 或 @频道名"
+            class="form-input" autocomplete="off">
+        </div>
+      </div>
+      <div class="form-hint">Telegram：在 @BotFather 创建 Bot 并获取 Token，Chat ID 可通过 @userinfobot 获取</div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <button type="submit" class="btn btn-secondary">保存通知配置</button>
+        <button type="button" id="test-notify-btn" onclick="testNotify()" class="btn btn-secondary">发送测试通知</button>
+        <span id="test-notify-result" style="font-size:13px;"></span>
+      </div>
+    </form>
+  </div>
+</div>
+
 <script>
 const _csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
 
@@ -444,5 +486,26 @@ async function testCookie() {
     resultEl.style.color = '#f87171';
   }
   btn.disabled = false; btn.textContent = '测试检测';
+}
+
+async function testNotify() {
+  const btn = document.getElementById('test-notify-btn');
+  const result = document.getElementById('test-notify-result');
+  btn.disabled = true; btn.textContent = '发送中...';
+  result.textContent = '';
+  try {
+    const r = await fetch('/settings/test-notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: '_csrf=' + encodeURIComponent(_csrf),
+    });
+    const d = await r.json();
+    result.textContent = d.msg;
+    result.style.color = d.ok ? 'var(--text-3)' : '#f87171';
+  } catch (e) {
+    result.textContent = '请求失败';
+    result.style.color = '#f87171';
+  }
+  btn.disabled = false; btn.textContent = '发送测试通知';
 }
 </script>

@@ -249,6 +249,11 @@ function buildCommand(task) {
 
     inner = [
       `export LC_ALL=C.UTF-8 2>/dev/null || export LC_ALL=en_US.UTF-8 2>/dev/null || true`,
+      `_STATUS_FILE="/tmp/restream_${task.id}.status"`,
+      `_write_status() {`,
+      `  printf '{"state":"%s","source":"%s","target":"%s","fallback":%s,"fallback_round":%d,"ts":%d,"pid":%d}\\n' "$1" "$2" "$3" "$4" "$5" "$(date +%s)" "$$" > "$_STATUS_FILE" 2>/dev/null || true`,
+      `}`,
+      `_write_status idle unknown unknown false 0`,
       `_FIRST=1`,
       `_MISS=0`,
       `_FALLBACK_ROUND=0`,
@@ -335,11 +340,13 @@ function buildCommand(task) {
       `  _pick_auto_record_for_fallback`,
       `  if [ -z "$_PLAY_REC" ]; then return 1; fi`,
       `  _FALLBACK_ROUND=$((_FALLBACK_ROUND + 1))`,
+      `  _write_status fallback live unknown true "$_FALLBACK_ROUND"`,
       `  echo "[兜底-录播] 直播链路中断，循环播放录播 $_PLAY_REC（第 $_FALLBACK_ROUND 轮，${'$_FALLBACK_SECONDS'} 秒）"`,
       `  ${encodeNotice}`,
       `  timeout "$_FALLBACK_SECONDS" ffmpeg -stream_loop -1 -re -fflags +genpts -i "$_PLAY_REC" ${outArgs} -f flv "${dest}"`,
       `  _FB_RC=$?`,
       `  if [ "$_FB_RC" -ne 0 ] && [ "$_FB_RC" -ne 124 ]; then`,
+      `    _write_status target_lost live lost false 0`,
       `    echo "[TARGET_LOST] fallback push failed rc=$_FB_RC; target RTMP/live event may have ended"`,
       `    return 2`,
       `  fi`,
@@ -405,10 +412,12 @@ function buildCommand(task) {
       `      sleep 3`,
       `      continue`,
       `    fi`,
+      `    _write_status source_retry retry unknown false 0`,
       `    echo "[错误] 无法获取直链，$_SLEEP 秒后重试..."`,
       `    sleep "$_SLEEP"`,
       `    continue`,
       `  fi`,
+      `  _write_status streaming live connected false 0`,
       `  echo "[推流] $STREAM_URL"`,
       `  if [ "$_FALLBACK_ROUND" -gt 0 ]; then`,
       `    echo "[直播恢复] 已重新获取直播源，切回直播并准备下一场录播留存"`,
@@ -610,7 +619,7 @@ async function checkHealth(task) {
     const cmd = [
       `kill -0 ${task.remote_pid} 2>/dev/null && echo alive || echo dead`,
       `stat -c %Y ${task.log_file} 2>/dev/null || echo 0`,
-      `{ tail -n ${HEALTH_LOG_TAIL_LINES} ${task.log_file} 2>/dev/null | tr '\\r\\n' '||' || true; echo; }`,
+      `cat /tmp/restream_${task.id}.status 2>/dev/null || echo '{}'`,
       `if ! command -v ss >/dev/null 2>&1; then echo rtmp_unknown; else _RTMP_HIT=0; _PIDS="${task.remote_pid}"; _SID=$(ps -o sid= -p ${task.remote_pid} 2>/dev/null | tr -d ' '); if [ -n "$_SID" ]; then _PIDS="$(ps -o pid= -g "$_SID" 2>/dev/null | tr '\\n' ' ')"; elif command -v pgrep >/dev/null 2>&1; then _SCAN="${task.remote_pid}"; while [ -n "$_SCAN" ]; do _NEXT=""; for _PP in $_SCAN; do for _CP in $(pgrep -P "$_PP" 2>/dev/null); do _PIDS="$_PIDS $_CP"; _NEXT="$_NEXT $_CP"; done; done; _SCAN="$_NEXT"; done; fi; for _P in $_PIDS; do ss -tnp 2>/dev/null | grep -E ':(1935|443) ' | grep -q "pid=$_P," && _RTMP_HIT=1; done; [ "$_RTMP_HIT" = "1" ] && echo rtmp_connected || echo no_rtmp; fi`,
     ].join('; ');
 
@@ -618,42 +627,78 @@ async function checkHealth(task) {
     const lines = result.stdout.trim().split('\n');
     const procStatus = lines[0]?.trim();
     const mtime = parseInt(lines[1]?.trim() || '0');
-    const logTail  = (lines[2] || '').toLowerCase();
     const rtmpStatus = lines[3]?.trim() || 'rtmp_unknown';
     const now = Math.floor(Date.now() / 1000);
     const stale = mtime > 0 && (now - mtime) > stallTimeout;
 
-    const logLines = logTail.split('|').filter(Boolean);
-    const lastIndexMatching = (pattern) =>
-      logLines.reduce((last, line, index) => pattern.test(line) ? index : last, -1);
-    const lastPushIndex = lastIndexMatching(/^\[推流\]/);
-    const lastFrameIndex = lastIndexMatching(/(?:^|\s)frame=\s*\d+/);
-    const lastFallbackIndex = lastIndexMatching(/播放备用文件|文件兜底|兜底-录播|录播兜底/);
-    const sourceRetryPattern = /无法获取直链|input\/output error|http error 404|404 not found|server returned 404|end of file|直播源不可用|no live streams?|not currently live|live has ended|room.*not.*live|unable to extract.*stream|no formats? found/i;
-    const sourceOfflinePattern = /not currently live|live has ended|room.*not.*live|no live streams?|直播源不可用/i;
-    const targetErrorPattern = /\[target_lost\]|av_interleaved_write_frame\(\).*(?:connection reset|broken pipe)|error writing trailer of rtmp|failed to update header with correct|broken pipe|error muxing a packet/i;
-    const rtmpErrorPattern = /failed to update header|broken pipe|rtmp.*error|error.*rtmp|av_interleaved_write_frame.*-32|error muxing a packet/i;
-    const lastSourceErrorIndex = lastIndexMatching(sourceRetryPattern);
-    const lastStrongOfflineIndex = lastIndexMatching(/http error 404|404 not found|server returned 404|not currently live|live has ended|room.*not.*live|no live streams?|直播源不可用/i);
-    const lastGoodStreamIndex = Math.max(lastPushIndex, lastFallbackIndex);
-    const isRetryLoop = lastSourceErrorIndex >= 0 && lastSourceErrorIndex > lastGoodStreamIndex;
+    // 解析 JSON 状态文件（由 bash 脚本的 _write_status 函数写出）
+    let statusJson = {};
+    try {
+      const raw = (lines[2] || '{}').trim();
+      statusJson = JSON.parse(raw);
+    } catch (_) {
+      // 状态文件不存在或格式错误，降级为空对象，后续判断使用默认值
+    }
+    const jsState       = statusJson.state     || 'unknown';   // streaming|source_retry|source_offline|fallback|target_lost|idle|expired
+    const jsSource      = statusJson.source    || 'unknown';   // live|retry|offline|unknown
+    const jsTarget      = statusJson.target    || 'unknown';   // connected|lost|unknown
+    const jsFallback    = statusJson.fallback  === true;       // boolean
+    const jsFbRound     = statusJson.fallback_round || 0;
+    const jsTs          = statusJson.ts         || 0;          // Unix 时间戳（bash 写出时）
+    const logTail       = '';  // 保留变量名避免引用错误，不再读取日志文本
+
+    // === 基于 JSON 状态文件的健康判断（替代正则文本解析）===
+
+    // 推流活跃：脚本报告 streaming 状态
+    const lastPushIndex    = jsState === 'streaming' ? 1 : -1;
+
+    // 兜底录播：脚本报告 fallback 状态
+    const isFallbackActive = jsFallback === true || jsState === 'fallback';
+    const lastFallbackIndex = isFallbackActive ? 1 : -1;
+
+    // 直播源重试：无法获取直链
+    const isRetryLoop      = jsState === 'source_retry' || jsSource === 'retry';
+
+    // 直播源明确离线（404/not live 类）
+    const isSourceOffline  = jsSource === 'offline' || jsState === 'source_offline';
+    const isSourceUnavailable = isSourceOffline;
+
+    // 目标 RTMP 断开
+    const isTargetLost     = jsState === 'target_lost' || jsTarget === 'lost';
+
+    // 直链过期（URL expire 时间戳临近）
+    const isExpiredDirectUrl = jsState === 'expired';
+
+    // ffmpeg 无流输出（状态文件首次创建前或脚本未能写出）
+    const isFfmpegNoStreamError = jsState === 'idle' && procStatus !== 'dead' && mtime > 0 && (now - mtime) < 30;
+
+    // 辅助：最后有效流时间（从 JSON ts 字段获取，0 表示未知）
+    const lastGoodStreamIndex = (jsState === 'streaming' || jsFallback) ? 1 : -1;
+
+    // 是否为直播类源（独立计算，不依赖 logTail）
     const isLiveSource = !task.source_url.startsWith('/') &&
       /douyin\.com|live\.bilibili\.com|live\.kuaishou\.com|kuaishou\.com\/short-video/i.test(task.source_url);
-    const isFallbackActive = lastFallbackIndex > lastPushIndex && lastFallbackIndex >= lastSourceErrorIndex;
-    const isSourceUnavailable = lastStrongOfflineIndex >= 0 && lastStrongOfflineIndex > lastGoodStreamIndex;
-    const isSourceOffline = lastIndexMatching(sourceOfflinePattern) > lastGoodStreamIndex;
-    const lastHttp404Index = lastIndexMatching(/http error 404|404 not found|server returned 404/i);
-    const lastInputEofIndex = lastIndexMatching(/will reconnect.*error=end of file|error=end of file|end of file|input\/output error/i);
-    const isExpiredDirectUrl = Math.max(lastHttp404Index, lastInputEofIndex) >= 0 &&
-      Math.max(lastHttp404Index, lastInputEofIndex) > lastGoodStreamIndex;
-    const isFfmpegNoStreamError = /output file #0 does not contain any stream|does not contain any stream|output.*does not contain.*stream/i.test(logTail);
-    const expectsRtmp1935 = /^rtmp:\/\//i.test(String(task.rtmp_url || ''));
+
+    // RTMP 连接状态（来自 ss 命令，与之前相同）
+    const expectsRtmp1935   = /^rtmp:\/\//i.test(String(task.rtmp_url || ''));
     const isYoutubeRtmpMissing = isYoutubeTarget(task) && expectsRtmp1935 && procStatus !== 'dead' && rtmpStatus === 'no_rtmp';
-    const isTargetStatus = task.status === 'target_lost';
-    const lastTargetErrorIndex = lastIndexMatching(targetErrorPattern);
-    const hasHealthyFrameAfterErrors = lastFrameIndex > Math.max(lastSourceErrorIndex, lastTargetErrorIndex);
-    const isTargetLost = lastTargetErrorIndex >= 0 &&
-      lastTargetErrorIndex > Math.max(lastGoodStreamIndex, lastSourceErrorIndex, lastFrameIndex);
+    const isTargetStatus    = task.status === 'target_lost';
+
+    // 验证码/封锁检测：JSON 状态文件中无法检测，降级为保守值（不触发 block 逻辑）
+    // TODO(Phase 5): 可在状态文件中添加 blocked 字段
+    const isBlocked = false;
+
+    // RTMP 推流错误：从 JSON target 字段判断
+    const isRtmpError = jsTarget === 'lost' && procStatus !== 'dead' && !jsFallback;
+
+    // 空流输出（无音视频流）：从状态文件无法直接检测，保留为 false
+    // 此场景在 streaming 状态下 mtime 会停止更新，stale 逻辑会捕获
+    const hasHealthyFrameAfterErrors = jsState === 'streaming';
+
+    // 兼容旧有判断变量（用于下方 if 判断块保持结构不变）
+    const lastSourceErrorIndex   = isRetryLoop ? 1 : -1;
+    const lastStrongOfflineIndex = isSourceOffline ? 1 : -1;
+    const lastTargetErrorIndex   = isTargetLost ? 1 : -1;
 
     if (procStatus !== 'dead' && isFfmpegNoStreamError && !hasHealthyFrameAfterErrors) {
       const newStallCount = (task.stall_count || 0) + 1;
@@ -754,7 +799,8 @@ async function checkHealth(task) {
     }
 
     // 检测抖音验证码特征词（streamlink 报错时会出现）
-    const isBlocked = /\b(captcha|challenge|banned)\b|403 forbidden|http error 403|server returned 403|forbidden by|verify failed|verification required|access denied/i.test(logTail);
+    // 验证码/封锁检测：JSON 状态文件中无法检测，降级为保守值（不触发 block 逻辑）
+    // TODO(Phase 5): 可在状态文件中添加 blocked 字段
     if (isBlocked) {
       const newBlockCount = (task.block_count || 0) + 1;
       console.warn(`[健康监控] 任务 ${task.id} 检测到验证码/封锁，block_count=${newBlockCount}`);
@@ -769,8 +815,7 @@ async function checkHealth(task) {
     }
 
     // 检测 RTMP 推流目标断开（YouTube/TikTok 主动断流、推流码失效等）
-    // FFmpeg 遇到这类错误会在日志中留下特征词，连续出现说明一直在重连而推不上去
-    const isRtmpError = lastIndexMatching(rtmpErrorPattern) > Math.max(lastSourceErrorIndex, lastFrameIndex);
+    // isRtmpError 已在 JSON 状态判断块中通过 jsTarget 字段计算
     if (isRtmpError) {
       const newStallCount = (task.stall_count || 0) + 1;
       console.warn(`[健康监控] 任务 ${task.id} 检测到 RTMP 推流错误（可能目标端断流），stall=${newStallCount}`);

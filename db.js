@@ -240,14 +240,9 @@ migrateSettingsPrimaryKey();
   db.prepare(`UPDATE ${table} SET user_id=? WHERE user_id IS NULL`).run(defaultUserId);
 });
 
+// 确保唯一索引存在（IF NOT EXISTS 保证幂等，不删除数据）
+// 注意：已删除原有的 DELETE FROM source_channels 语句，该语句每次启动都会静默清除重复行，存在数据丢失风险
 db.exec(`
-  DELETE FROM source_channels
-  WHERE id NOT IN (
-    SELECT MIN(id)
-    FROM source_channels
-    GROUP BY user_id, url
-  );
-
   CREATE UNIQUE INDEX IF NOT EXISTS idx_source_channels_user_url
   ON source_channels(user_id, url);
 `);

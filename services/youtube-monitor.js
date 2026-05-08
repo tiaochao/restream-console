@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const db = require('../db');
 const { getSetting } = require('../db');
+const { logError } = require('../utils/log-error');
 
 const API_BASE = 'https://www.googleapis.com/youtube/v3';
 const CHECK_INTERVAL_MS = 60 * 1000;
@@ -159,7 +160,7 @@ function extractYouTubeVideoId(url) {
       if (parts[0] === 'shorts' && parts[1]) return parts[1];
       if (parts[0] === 'embed' && parts[1]) return parts[1];
     }
-  } catch (_) {}
+  } catch (err) { logError('extractVideoId', err); }
   return '';
 }
 
@@ -175,7 +176,7 @@ function extractYouTubeChannelRef(url) {
     if (parts[0] === 'c' && parts[1]) return { handle: parts[1] };
     if (parts[0]?.startsWith('@')) return { handle: parts[0].slice(1) };
     if (parts[0] === 'user' && parts[1]) return { handle: parts[1] };
-  } catch (_) {}
+  } catch (err) { logError('extractChannelRef', err); }
   return {};
 }
 
@@ -421,6 +422,7 @@ function startMonitor() {
 
 module.exports = {
   startMonitor,
+  classifyApiError,
   scanOnce,
   checkTask,
   checkYouTubeTarget,

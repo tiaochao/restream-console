@@ -7,6 +7,7 @@ const path = require('path');
 const { decrypt } = require('./crypto');
 const notifier = require('./notifier');
 const { writeEvent } = require('../db');
+const { logError } = require('../utils/log-error');
 
 const PLATFORM_RTMP = {
   youtube: 'rtmp://a.rtmp.youtube.com/live2',
@@ -70,7 +71,7 @@ function sourceRecordLabel(sourceUrl, fallback = '直播间') {
     if (/douyin\.com$/i.test(host) && id) return `抖音直播间_${id.slice(-12)}`;
     if (/bilibili\.com$/i.test(host) && id) return `B站直播间_${id}`;
     if (id) return `直播间_${id.slice(-12)}`;
-  } catch (_) {}
+  } catch (err) { logError('sourceRecordLabel', err); }
   return fallback;
 }
 
@@ -83,7 +84,8 @@ function channelRecordLabel(task) {
       ORDER BY id DESC LIMIT 1
     `).get(task.user_id, task.source_url);
     return channel?.name || '';
-  } catch (_) {
+  } catch (err) {
+    logError('channelRecordLabel', err);
     return '';
   }
 }
@@ -513,7 +515,7 @@ async function startTask(taskId, userId = null) {
       if (isBilibili) liveResult = await checkBilibili(task.source_url);
       if (isKuaishou) liveResult = await checkKuaishou(task.source_url);
       if (liveResult && liveResult.isLive === false) isLive = false;
-    } catch (_) {}
+    } catch (err) { logError('startTaskQueued/liveCheck', err); }
 
     if (!isLive) {
       console.log(`[任务${taskId}] 主播未开播，进入等待直播状态`);
@@ -531,7 +533,7 @@ async function startTask(taskId, userId = null) {
           task._resolvedStreamUrl = resolved.url;
           console.log(`[任务${taskId}] 抖音流地址(${resolved.protocol}): ${resolved.url.substring(0, 60)}...`);
         }
-      } catch (_) {}
+      } catch (err) { logError('startTaskQueued/douyinResolve', err); }
 
       // 3) API 失败：用 streamlink + cookies
       if (cookies) {
@@ -923,7 +925,8 @@ async function checkHealth(task) {
         _record(task, task.status, 'running', 'recovered');
       }
     }
-  } catch (_) {
+  } catch (err) {
+    logError('checkHealth', err);
     // SSH 暂时失败，不改状态
   }
 }
@@ -962,7 +965,7 @@ function startMonitor() {
     const active = db.prepare(
       "SELECT * FROM tasks WHERE status IN ('running','stalled','source_retrying','target_lost')"
     ).all();
-    await processInBatches(active, 3, task => checkHealth(task).catch(() => {}));
+    await processInBatches(active, 3, task => checkHealth(task).catch(err => logError('checkHealth', err)));
   }, 30 * 1000);
 
   // 等待直播监控：每 60s 检查 waiting_live 任务，开播则自动启动
@@ -1004,7 +1007,7 @@ async function checkAndStartIfLive(task) {
       console.log(`[等待直播] 任务 ${task.id} 检测到开播，自动启动`);
       startTaskQueued(task.id, task.user_id);
     }
-  } catch (_) {}
+  } catch (err) { logError('checkAndStartIfLive', err); }
 }
 
 module.exports = { startTask, startTaskQueued, stopTask, checkHealth, startMonitor, PLATFORM_RTMP, checkAndStartIfLive, recordLabelForTask, _buildCommand: buildCommand };

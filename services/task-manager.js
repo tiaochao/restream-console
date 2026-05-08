@@ -5,13 +5,13 @@ const { resolveDouyinStreamUrl } = require('./platform-api');
 const fs = require('fs');
 const path = require('path');
 const { decrypt } = require('./crypto');
+const notifier = require('./notifier');
 
 const PLATFORM_RTMP = {
   youtube: 'rtmp://a.rtmp.youtube.com/live2',
   tiktok:  'rtmp://push.tiktokv.com/live',
 };
 
-const HEALTH_LOG_TAIL_LINES = 200;
 const MEDIA_LIBRARY_DIR = '/root/restream_uploads';
 const LEGACY_RECORD_DIR = '/root/restream_recordings';
 const AUTO_RECORDING_PREFIX = '录播';
@@ -169,7 +169,7 @@ function ffmpegRecordArgs() {
 }
 
 function ffmpegHttpInputArgs(headers = '') {
-  return `-fflags +genpts -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 3 -reconnect_attempts 3 ${headers} -rw_timeout 12000000`;
+  return `-fflags +genpts -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 3 ${headers} -rw_timeout 12000000`;
 }
 
 function remoteDependencyInstallCommand() {
@@ -581,11 +581,26 @@ function startTaskQueued(taskId, userId = null) {
       // 启动失败时标记为 error，避免永远卡在 restarting
       db.prepare(`UPDATE tasks SET status='error', remote_pid=NULL WHERE id=? ${userId ? 'AND user_id=?' : ''}`)
         .run(...(userId ? [taskId, userId] : [taskId]));
+      notifier.send(userId, {
+        type: 'task_start_failed',
+        taskId,
+        taskName: String(taskId),
+        message: `任务 ${taskId} 启动失败：${e.message}`,
+      }).catch(() => {});
     }
     const delay = parseInt(getSetting('start_delay', userId || undefined) || '5') * 1000;
     await new Promise(r => setTimeout(r, delay));
   });
   return startQueue;
+}
+
+function _notify(task, type, message) {
+  notifier.send(task.user_id, {
+    type,
+    taskId: task.id,
+    taskName: task.name || String(task.id),
+    message,
+  }).catch(() => {});
 }
 
 async function stopTask(taskId, userId = null) {
@@ -606,7 +621,7 @@ async function stopTask(taskId, userId = null) {
     .run(...(userId ? [taskId, userId] : [taskId]));
 }
 
-// 健康检测：进程存活 + 日志文件活跃度 + 验证码检测
+// 健康检测：进程存活 + 日志文件活跃度 + 状态文件 + 目标端连接检测
 async function checkHealth(task) {
   if (!task.remote_pid || !task.vps_id) return;
 
@@ -616,7 +631,7 @@ async function checkHealth(task) {
   try {
     await syncAutoRecordingMediaFile(task).catch(() => {});
 
-    // 一次 SSH 同时检查进程存活 + 日志 mtime + 日志末尾（检测验证码关键词）
+    // 一次 SSH 同时检查进程存活 + 日志 mtime + 状态文件 + RTMP 连接
     const cmd = [
       `kill -0 ${task.remote_pid} 2>/dev/null && echo alive || echo dead`,
       `stat -c %Y ${task.log_file} 2>/dev/null || echo 0`,
@@ -644,18 +659,11 @@ async function checkHealth(task) {
     const jsSource      = statusJson.source    || 'unknown';   // live|retry|offline|unknown
     const jsTarget      = statusJson.target    || 'unknown';   // connected|lost|unknown
     const jsFallback    = statusJson.fallback  === true;       // boolean
-    const jsFbRound     = statusJson.fallback_round || 0;
-    const jsTs          = statusJson.ts         || 0;          // Unix 时间戳（bash 写出时）
-    const logTail       = '';  // 保留变量名避免引用错误，不再读取日志文本
 
     // === 基于 JSON 状态文件的健康判断（替代正则文本解析）===
 
-    // 推流活跃：脚本报告 streaming 状态
-    const lastPushIndex    = jsState === 'streaming' ? 1 : -1;
-
     // 兜底录播：脚本报告 fallback 状态
     const isFallbackActive = jsFallback === true || jsState === 'fallback';
-    const lastFallbackIndex = isFallbackActive ? 1 : -1;
 
     // 直播源重试：无法获取直链
     const isRetryLoop      = jsState === 'source_retry' || jsSource === 'retry';
@@ -673,10 +681,7 @@ async function checkHealth(task) {
     // ffmpeg 无流输出（状态文件首次创建前或脚本未能写出）
     const isFfmpegNoStreamError = jsState === 'idle' && procStatus !== 'dead' && mtime > 0 && (now - mtime) < 30;
 
-    // 辅助：最后有效流时间（从 JSON ts 字段获取，0 表示未知）
-    const lastGoodStreamIndex = (jsState === 'streaming' || jsFallback) ? 1 : -1;
-
-    // 是否为直播类源（独立计算，不依赖 logTail）
+    // 是否为直播类源
     const isLiveSource = !task.source_url.startsWith('/') &&
       /douyin\.com|live\.bilibili\.com|live\.kuaishou\.com|kuaishou\.com\/short-video/i.test(task.source_url);
 
@@ -696,11 +701,6 @@ async function checkHealth(task) {
     // 此场景在 streaming 状态下 mtime 会停止更新，stale 逻辑会捕获
     const hasHealthyFrameAfterErrors = jsState === 'streaming';
 
-    // 兼容旧有判断变量（用于下方 if 判断块保持结构不变）
-    const lastSourceErrorIndex   = isRetryLoop ? 1 : -1;
-    const lastStrongOfflineIndex = isSourceOffline ? 1 : -1;
-    const lastTargetErrorIndex   = isTargetLost ? 1 : -1;
-
     if (procStatus !== 'dead' && isFfmpegNoStreamError && !hasHealthyFrameAfterErrors) {
       const newStallCount = (task.stall_count || 0) + 1;
       console.warn(`[health] task ${task.id} ffmpeg output has no streams, restarting to rebuild command, stall=${newStallCount}`);
@@ -710,8 +710,10 @@ async function checkHealth(task) {
         await stopTask(task.id, task.user_id).catch(() => {});
         db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
         startTaskQueued(task.id, task.user_id).catch(() => {});
+        _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
       } else if (task.status !== 'stalled') {
         db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
+        _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
       }
       return;
     }
@@ -747,6 +749,7 @@ async function checkHealth(task) {
           await stopTask(task.id, task.user_id).catch(() => {});
           db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
           startTaskQueued(task.id, task.user_id).catch(() => {});
+          _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
         } else {
           await stopTask(task.id, task.user_id).catch(() => {});
           db.prepare("UPDATE tasks SET status='target_lost', remote_pid=NULL WHERE id=?").run(task.id);
@@ -766,11 +769,14 @@ async function checkHealth(task) {
           await stopTask(task.id, task.user_id).catch(() => {});
           db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
           startTaskQueued(task.id, task.user_id).catch(() => {});
+          _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
         } else {
           db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
+          _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
         }
       } else if (task.status !== 'stalled') {
         db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
+        _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
       }
       return;
     }
@@ -789,6 +795,7 @@ async function checkHealth(task) {
       if (!isSourceOffline || newStallCount < 2) {
         if (task.status !== 'stalled') {
           db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
+          _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
         }
         return;
       }
@@ -828,15 +835,18 @@ async function checkHealth(task) {
           await stopTask(task.id, task.user_id).catch(() => {});
           db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
           startTaskQueued(task.id, task.user_id).catch(() => {});
+          _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
         } else {
           console.error(`[健康监控] 任务 ${task.id} RTMP 持续报错，自动停止`);
           await stopTask(task.id, task.user_id).catch(() => {});
           db.prepare("UPDATE tasks SET status='error', remote_pid=NULL WHERE id=?").run(task.id);
+          _notify(task, 'task_error', `任务 ${task.name || task.id} 已停止（进程死亡，无自动重启）`);
         }
         return;
       }
       if (task.status !== 'stalled') {
         db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
+        _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
       }
       return;
     }
@@ -847,8 +857,10 @@ async function checkHealth(task) {
         console.log(`[健康监控] 任务 ${task.id} 进程已死，自动重启`);
         db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
         startTaskQueued(task.id, task.user_id).catch(() => {});
+        _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
       } else {
         db.prepare("UPDATE tasks SET status='error', remote_pid=NULL WHERE id=?").run(task.id);
+        _notify(task, 'task_error', `任务 ${task.name || task.id} 已停止（进程死亡，无自动重启）`);
       }
       return;
     }
@@ -865,6 +877,7 @@ async function checkHealth(task) {
         // 更新显示状态为 stalled，但暂不杀进程
         if (task.status !== 'stalled') {
           db.prepare("UPDATE tasks SET status='stalled' WHERE id=?").run(task.id);
+          _notify(task, 'task_stalled', `任务 ${task.name || task.id} 已掉线，请检查推流状态`);
         }
         return;
       }
@@ -874,14 +887,19 @@ async function checkHealth(task) {
         await stopTask(task.id, task.user_id).catch(() => {});
         db.prepare("UPDATE tasks SET status='restarting' WHERE id=?").run(task.id);
         startTaskQueued(task.id, task.user_id).catch(() => {});
+        _notify(task, 'task_restarting', `任务 ${task.name || task.id} 自动重启中`);
       } else {
         await stopTask(task.id, task.user_id).catch(() => {});
         db.prepare("UPDATE tasks SET status='error', remote_pid=NULL WHERE id=?").run(task.id);
+        _notify(task, 'task_error', `任务 ${task.name || task.id} 已停止（持续无日志更新，无自动重启）`);
       }
     } else if (mtime > 0) {
       // 正常运行，更新活跃时间，清零计数；若之前卡过，恢复为 running
       const statusPatch = ['stalled', 'source_retrying'].includes(task.status) ? ", status='running'" : '';
       db.prepare(`UPDATE tasks SET last_active_at=datetime('now'), stall_count=0, block_count=0${statusPatch} WHERE id=?`).run(task.id);
+      if ((task.stall_count || 0) > 0 || ['stalled', 'restarting', 'source_retrying'].includes(task.status)) {
+        _notify(task, 'task_recovered', `任务 ${task.name || task.id} 已恢复正常`);
+      }
     }
   } catch (_) {
     // SSH 暂时失败，不改状态

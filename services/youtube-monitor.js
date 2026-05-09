@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const db = require('../db');
-const { getSetting } = require('../db');
+const { getSetting, defaultUserId } = require('../db');
 const { logError } = require('../utils/log-error');
 
 const API_BASE = 'https://www.googleapis.com/youtube/v3';
@@ -110,6 +110,14 @@ function getYouTubeApiKeys(userId) {
   const legacy = parseApiKeys(getSetting('youtube_api_key', userId));
   const envKeys = parseApiKeys(process.env.YOUTUBE_API_KEYS || process.env.YOUTUBE_API_KEY || '');
   return [...pooled, ...legacy, ...envKeys].filter((key, index, arr) => arr.indexOf(key) === index);
+}
+
+// 若用户未配置自己的 key，透明回退到管理员共享配额
+// 配额追踪（cursor/status）也跟随有效 userId，确保多用户共用时不重复计数
+function getEffectiveApiUserId(userId) {
+  const hasOwn = parseApiKeys(getSetting('youtube_api_keys', userId)).length > 0
+    || parseApiKeys(getSetting('youtube_api_key', userId)).length > 0;
+  return hasOwn ? userId : defaultUserId;
 }
 
 function getUsableYouTubeApiKeys(userId) {
@@ -343,13 +351,14 @@ function patchTask(taskId, data) {
 }
 
 async function checkTask(task) {
-  const apiKeys = getUsableYouTubeApiKeys(task.user_id);
+  const effectiveUserId = getEffectiveApiUserId(task.user_id);
+  const apiKeys = getUsableYouTubeApiKeys(effectiveUserId);
   if (apiKeys.length === 0) return { ok: false, skipped: true, msg: '未配置 YouTube API Key' };
 
   const url = taskTargetUrl(task);
   if (!url) return { ok: false, skipped: true, msg: '未绑定 YouTube 直播间或频道链接' };
 
-  const startIndex = getApiCursor(task.user_id, apiKeys.length);
+  const startIndex = getApiCursor(effectiveUserId, apiKeys.length);
   let lastError = null;
   let retryableCount = 0;
 
@@ -358,17 +367,17 @@ async function checkTask(task) {
     const apiKey = apiKeys[keyIndex];
     try {
       const data = await checkYouTubeTarget(url, apiKey);
-      markKeyOk(task.user_id, apiKey);
-      rotateApiCursor(task.user_id, keyIndex, apiKeys.length);
+      markKeyOk(effectiveUserId, apiKey);
+      rotateApiCursor(effectiveUserId, keyIndex, apiKeys.length);
       patchTask(task.id, data || { status: 'unknown', error: '无检测结果' });
       return { ok: true, data, keyIndex, keyCount: apiKeys.length };
     } catch (e) {
       lastError = e;
-      markKeyError(task.user_id, apiKey, e);
+      markKeyError(effectiveUserId, apiKey, e);
       if (!isQuotaOrKeyError(e) || attempt === apiKeys.length - 1) break;
       retryableCount++;
       console.warn(`[youtube-monitor] task ${task.id}: API Key ${maskApiKey(apiKey)} 配额/权限不可用，切换下一个`);
-      rotateApiCursor(task.user_id, keyIndex, apiKeys.length);
+      rotateApiCursor(effectiveUserId, keyIndex, apiKeys.length);
     }
   }
 
@@ -429,6 +438,7 @@ module.exports = {
   getYouTubeApiKeys,
   getUsableYouTubeApiKeys,
   getYouTubeApiKey,
+  getEffectiveApiUserId,
   testApiKeyPool,
   keyFingerprint,
   extractYouTubeVideoId,

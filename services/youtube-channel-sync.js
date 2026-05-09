@@ -1,5 +1,5 @@
 const db = require('../db');
-const { getUsableYouTubeApiKeys } = require('./youtube-monitor');
+const { getUsableYouTubeApiKeys, getEffectiveApiUserId } = require('./youtube-monitor');
 
 const API_BASE = 'https://www.googleapis.com/youtube/v3';
 
@@ -37,7 +37,8 @@ function isQuotaError(e) {
 }
 
 async function withKey(userId, fn) {
-  const keys = getUsableYouTubeApiKeys(userId);
+  const effectiveUserId = getEffectiveApiUserId(userId);
+  const keys = getUsableYouTubeApiKeys(effectiveUserId);
   if (!keys.length) throw new Error('未配置可用的 YouTube API Key');
   let lastErr;
   for (const key of keys) {

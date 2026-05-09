@@ -76,17 +76,23 @@
         </div>
         <div>
           <label class="form-label">YouTube Data API Key 池</label>
+          <% if (currentUser && currentUser.role !== 'admin') { %>
+          <div style="padding:10px 14px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.3);border-radius:6px;font-size:13px;color:var(--text-2);">
+            正在使用管理员共享配额，YouTube 检测功能已可用，无需配置。
+          </div>
+          <% } else { %>
           <textarea name="youtube_api_keys" id="youtube-api-keys-input" rows="5" autocomplete="off" spellcheck="false"
             placeholder="每行一个 API Key，也支持用逗号、空格分隔"
             class="form-textarea form-mono" style="resize:vertical;"><%= cfg.youtube_api_keys %></textarea>
           <div class="form-hint">
-            当前已配置 <%= cfg.youtube_api_key_count || 0 %> 个 Key。检测 YouTube 状态时会按当前用户的 Key 池轮询使用，遇到配额耗尽、限速或 Key 无效会自动切换下一个；不配置时只保留 RTMP 连接检测。
+            当前已配置 <%= cfg.youtube_api_key_count || 0 %> 个 Key。检测 YouTube 状态时会按 Key 池轮询使用，遇到配额耗尽、限速或 Key 无效会自动切换下一个。
           </div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;">
             <button type="button" onclick="testYouTubeApiKeys()" id="youtube-api-test-btn" class="btn btn-secondary">检测 API 池</button>
             <span id="youtube-api-test-summary" style="font-size:13px;color:var(--text-3);"></span>
           </div>
           <div id="youtube-api-test-results" style="display:none;margin-top:10px;border:1px solid rgba(255,255,255,0.08);border-radius:8px;overflow:hidden;"></div>
+          <% } %>
         </div>
         <div>
           <button type="submit" class="btn btn-secondary">保存间隔</button>

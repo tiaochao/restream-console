@@ -1,7 +1,7 @@
 ﻿const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { hashPassword, verifyPassword } = require('../db');
+const { hashPassword, verifyPassword, defaultUserId } = require('../db');
 const platformApi = require('../services/platform-api');
 const youtubeMonitor = require('../services/youtube-monitor');
 const { encrypt, decrypt } = require('../services/crypto');
@@ -41,6 +41,7 @@ function normalizeYouTubeApiKeys(value) {
 
 function getCfg(userId) {
   const apiKeys = getSetting(userId, 'youtube_api_keys') || getSetting(userId, 'youtube_api_key') || '';
+  const hasOwnKeys = normalizeYouTubeApiKeys(apiKeys).split('\n').filter(Boolean).length > 0;
   return {
     start_delay: getSetting(userId, 'start_delay') || '5',
     stall_timeout: getSetting(userId, 'stall_timeout') || '120',
@@ -49,6 +50,7 @@ function getCfg(userId) {
     youtube_api_key: getSetting(userId, 'youtube_api_key') || '',
     youtube_api_keys: apiKeys,
     youtube_api_key_count: normalizeYouTubeApiKeys(apiKeys).split('\n').filter(Boolean).length,
+    using_admin_api: !hasOwnKeys && userId !== defaultUserId,
     douyin_cookies: decrypt(getSetting(userId, 'douyin_cookies') || '') || '',
     notify_webhook_url:        getSetting(userId, 'notify_webhook_url')      || '',
     notify_telegram_token:     getSetting(userId, 'notify_telegram_token')   || '',

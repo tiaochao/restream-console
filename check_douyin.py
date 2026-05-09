@@ -6,12 +6,12 @@
   python3 check_douyin.py --stream-url <douyin URL> [cookie_string]
 输出: live | offline | unknown
 
-检测逻辑:
-  1. webcast/reflow API → status=4/5 (offline 信号可信) 立即返回 offline
-  2. API live 信号完全不信任 → 进入流内容验证
-  3. yt-dlp 优先获取 m3u8 地址，获取不到则取 FLV
-  4. m3u8: 先追踪 master playlist 的子清单，再检查 #EXT-X-ENDLIST
-  5. FLV:  检查 Content-Length 响应头（有=VoD 有限文件，无=无限直播流）
+检测逻辑（分级降级）:
+  1. webcast/reflow API → status=4/5 确认 offline，立即返回
+  2. yt-dlp 获取流地址 → m3u8 检查 ENDLIST / FLV 检查 Content-Length
+  3. yt-dlp 失败 → 用 API 返回的流地址做同样的内容验证
+  4. 全部流验证失败 → 信任 API status==2 作为最后手段返回 live
+  5. 完全无法判断 → unknown
 """
 import sys, re, json, time, urllib.request, urllib.error, urllib.parse, subprocess
 
@@ -91,7 +91,30 @@ def check_room_api(web_rid, cookies):
     room  = (data.get('data') or {}).get('room') or {}
     room_id = str(room.get('id', ''))
     status  = room.get('status')
-    return status in (4, 5), room_id   # True=确认 offline
+
+    stream_urls = []
+    stream_info = room.get('stream_url') or {}
+    hls_map = stream_info.get('hls_pull_url_map') or {}
+    flv_map = stream_info.get('flv_pull_url') or {}
+    for q in ('FULL_HD1', 'HD1', 'SD1'):
+        if q in hls_map:
+            stream_urls.append((hls_map[q], 'hls')); break
+    else:
+        v = list(hls_map.values())
+        if v: stream_urls.append((v[0], 'hls'))
+    for q in ('FULL_HD1', 'HD1', 'SD1'):
+        if q in flv_map:
+            stream_urls.append((flv_map[q], 'flv')); break
+    else:
+        v = list(flv_map.values())
+        if v: stream_urls.append((v[0], 'flv'))
+
+    return {
+        'is_offline': status in (4, 5),
+        'room_id': room_id,
+        'status': status,
+        'stream_urls': stream_urls,
+    }
 
 def pick_stream_url(stream_url):
     if not isinstance(stream_url, dict):
@@ -336,15 +359,12 @@ def is_live_stream(url):
 
 
 def verify_live(page_url, cookies):
+    """返回 True=确认直播中, False=确认未直播, None=无法判断"""
     stream_url = get_stream_url(page_url, cookies)
     if not stream_url:
-        return False          # 拿不到流地址 → 未开播
+        return None
 
-    result = is_live_stream(stream_url)
-    if result is not None:
-        return result
-
-    return False              # 无法判断时保守返回 offline
+    return is_live_stream(stream_url)
 
 
 # ── 主流程 ────────────────────────────────────────────────────────────────────
@@ -370,15 +390,17 @@ def main():
     room_m = re.search(r'live\.douyin\.com/(\d+)', url)
     if room_m:
         web_rid = room_m.group(1)
-        room_id = ''
+        api_info = {'room_id': '', 'status': None, 'stream_urls': []}
 
-        # 1. webcast API → 仅信任 offline 信号
+        # 1. webcast API → 仅信任 offline 信号，保存完整返回数据
         try:
-            is_offline, room_id = check_room_api(web_rid, cookies)
-            if is_offline:
+            api_info = check_room_api(web_rid, cookies)
+            if api_info['is_offline']:
                 print('offline'); return
         except Exception:
             pass
+
+        room_id = api_info.get('room_id', '')
 
         # 2. 从 HTML 补充 room_id（API 未返回时）
         if not room_id:
@@ -398,11 +420,33 @@ def main():
             except Exception:
                 pass
 
-        # 4. 流内容验证（不信任任何 API 的 live 信号）
+        # 4. yt-dlp 流内容验证
         try:
-            print('live' if verify_live(url, cookies) else 'offline')
+            live_result = verify_live(url, cookies)
         except Exception:
-            print('unknown')
+            live_result = None
+
+        if live_result is True:
+            print('live'); return
+        if live_result is False:
+            print('offline'); return
+
+        # 5. yt-dlp 无法判断 → 尝试 API 返回的流地址验证
+        for stream_url, _ in api_info.get('stream_urls', []):
+            try:
+                result = is_live_stream(stream_url)
+                if result is True:
+                    print('live'); return
+                if result is False:
+                    print('offline'); return
+            except Exception:
+                continue
+
+        # 6. 全部验证手段耗尽 → 信任 API 状态作为最后手段
+        if api_info.get('status') == 2:
+            print('live'); return
+
+        print('unknown')
         return
 
     # ── www.douyin.com/user/SECID ────────────────────────────────────────────
@@ -420,7 +464,13 @@ def main():
         except Exception:
             pass
         try:
-            print('live' if verify_live(url, cookies) else 'offline')
+            live_result = verify_live(url, cookies)
+            if live_result is True:
+                print('live')
+            elif live_result is False:
+                print('offline')
+            else:
+                print('unknown')
         except Exception:
             print('unknown')
         return

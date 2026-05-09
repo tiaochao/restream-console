@@ -1,6 +1,7 @@
 node_modules/
 .gstack/
 .codex/
+__pycache__/
 data/*.sqlite
 data/*.sqlite-*
 .env

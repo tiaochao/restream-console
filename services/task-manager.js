@@ -79,11 +79,13 @@ async function startTask(taskId, userId = null) {
   const ownerId = task.user_id;
   const maxPerVps = parseInt(getSetting('max_tasks_per_vps', ownerId) || '5');
   const running = db.prepare(
-    "SELECT COUNT(*) as n FROM tasks WHERE user_id=? AND vps_id=? AND status='running'"
+    "SELECT COUNT(*) as n FROM tasks WHERE user_id=? AND vps_id=? AND status IN ('running','source_retrying','target_lost','stalled','restarting')"
   ).get(ownerId, task.vps_id).n;
   if (running >= maxPerVps) {
     throw new Error(`该 VPS 已有 ${running} 个任务运行，上限 ${maxPerVps} 个`);
   }
+
+  await cleanupRemoteTaskProcesses(task).catch(err => logError('startTask/preCleanup', err));
 
   // 需要本地检测开播状态的平台：抖音 / B站 / 快手
   const isMediaFile = task.source_url.startsWith('/');
@@ -151,16 +153,16 @@ async function startTask(taskId, userId = null) {
     throw new Error('启动失败: ' + (result.stderr || '无法获取 PID'));
   }
 
+  // [FEAT-01] 合并为单条原子 UPDATE：status 和 vps_id 同时写入，消除 health check 看到 vps_id=NULL 的窗口期
   db.prepare(`
     UPDATE tasks
     SET status='running', remote_pid=?, log_file=?,
-        started_at=datetime('now'), last_active_at=datetime('now'), stall_count=0, block_count=0
+        started_at=datetime('now'), last_active_at=datetime('now'), stall_count=0, block_count=0,
+        vps_id=COALESCE(?, vps_id)
     WHERE id=?
-  `).run(pid, logFile, taskId);
+  `).run(pid, logFile, scheduledVps ? scheduledVps.id : null, taskId);
 
-  // [FEAT-01] 调度器分配后写回 vps_id（health check 依赖此字段，必须在 return 前完成）
   if (scheduledVps) {
-    db.prepare('UPDATE tasks SET vps_id=? WHERE id=?').run(scheduledVps.id, taskId);
     writeEvent(taskId, task.user_id, task.status, 'running', `scheduler:${scheduledVps.name}(${scheduledVps.id})`);
   }
 
@@ -205,17 +207,87 @@ function _record(task, fromStatus, toStatus, reason) {
   writeEvent(task.id, task.user_id, fromStatus, toStatus, reason);
 }
 
+async function cleanupRemoteTaskProcesses(task) {
+  if (!task?.vps_id) return;
+  const stopScriptB64 = Buffer.from(buildRemoteStopTaskScript(task)).toString('base64');
+  await sshService.exec(
+    task.vps_id,
+    `printf %s ${shSingleQuote(stopScriptB64)} | base64 -d > /tmp/restream_stop_${task.id}.sh && chmod 700 /tmp/restream_stop_${task.id}.sh && bash /tmp/restream_stop_${task.id}.sh; rm -f /tmp/restream_stop_${task.id}.sh 2>/dev/null; true`,
+    task.user_id
+  );
+}
+
+function buildRemoteStopTaskScript(task) {
+  const taskId = parseInt(task.id, 10);
+  const remotePid = parseInt(task.remote_pid || 0, 10) || 0;
+  return `#!/usr/bin/env bash
+set -u
+TASK_ID=${taskId}
+TASK_PID=${remotePid}
+TMP_SESS=$(mktemp /tmp/restream_stop_${taskId}.XXXXXX 2>/dev/null || echo /tmp/restream_stop_${taskId}.$$)
+: > "$TMP_SESS"
+
+_add_sid_for_pid() {
+  _PID="$1"
+  [ -z "$_PID" ] && return
+  _SID=$(ps -o sid= -p "$_PID" 2>/dev/null | tr -d ' ')
+  [ -n "$_SID" ] && [ "$_SID" != "0" ] && echo "$_SID" >> "$TMP_SESS"
+}
+
+if [ "$TASK_PID" -gt 0 ] 2>/dev/null; then
+  _add_sid_for_pid "$TASK_PID"
+  if command -v pgrep >/dev/null 2>&1; then
+    _SCAN="$TASK_PID"
+    while [ -n "$_SCAN" ]; do
+      _NEXT=""
+      for _PP in $_SCAN; do
+        for _CP in $(pgrep -P "$_PP" 2>/dev/null); do
+          _add_sid_for_pid "$_CP"
+          _NEXT="$_NEXT $_CP"
+        done
+      done
+      _SCAN="$_NEXT"
+    done
+  fi
+fi
+
+ps -eo pid=,sid=,cmd= | while read -r _PID _SID _CMD; do
+  case "$_CMD" in
+    *"task_${TASK_ID}_latest.ts"*|*"task_${TASK_ID}_recording.tmp"*|*"task_${TASK_ID}_fallback.tmp"*|*"/tmp/restream_${TASK_ID}.log"*|*"/tmp/restream_${TASK_ID}.status"*|*"/tmp/dy_ck_${TASK_ID}.txt"*|*"task${TASK_ID}.ts"*|*"task${TASK_ID}_"*)
+      [ -n "$_SID" ] && [ "$_SID" != "0" ] && echo "$_SID" >> "$TMP_SESS"
+      ;;
+  esac
+done
+
+_SELF_SID=$(ps -o sid= -p $$ 2>/dev/null | tr -d ' ')
+sort -u "$TMP_SESS" | while read -r _SID; do
+  [ -z "$_SID" ] && continue
+  [ "$_SID" = "$_SELF_SID" ] && continue
+  for _P in $(ps -o pid= -s "$_SID" 2>/dev/null); do
+    kill -TERM "$_P" 2>/dev/null || true
+  done
+done
+sleep 0.5
+sort -u "$TMP_SESS" | while read -r _SID; do
+  [ -z "$_SID" ] && continue
+  [ "$_SID" = "$_SELF_SID" ] && continue
+  for _P in $(ps -o pid= -s "$_SID" 2>/dev/null); do
+    kill -KILL "$_P" 2>/dev/null || true
+  done
+done
+
+rm -f "$TMP_SESS" "/tmp/dy_ck_${taskId}.txt" "/tmp/restream_${taskId}.status" 2>/dev/null || true
+true
+`;
+}
+
 async function stopTask(taskId, userId = null) {
   const task = db.prepare(`SELECT * FROM tasks WHERE id = ? ${userId ? 'AND user_id=?' : ''}`)
     .get(...(userId ? [taskId, userId] : [taskId]));
   if (!task) throw new Error('任务不存在');
 
-  if (task.remote_pid && task.vps_id) {
-    await sshService.exec(
-      task.vps_id,
-      `pkill -P ${task.remote_pid} 2>/dev/null; kill ${task.remote_pid} 2>/dev/null; rm -f /tmp/dy_ck_${taskId}.txt 2>/dev/null; true`,
-      task.user_id
-    ).catch(() => {});
+  if (task.vps_id) {
+    await cleanupRemoteTaskProcesses(task).catch(() => {});
     await new Promise(r => setTimeout(r, 700));
     await syncAutoRecordingMediaFile(task).catch(() => {});
   }
@@ -312,7 +384,7 @@ function startMonitor() {
   // 任务健康检测：每 30s（运行中 + 异常/重试中的活动任务）
   setInterval(async () => {
     const active = db.prepare(
-      "SELECT * FROM tasks WHERE status IN ('running','stalled','source_retrying','target_lost')"
+      "SELECT * FROM tasks WHERE status IN ('running','stalled','source_retrying','target_lost','restarting')"
     ).all();
     await processInBatches(active, 3, task => checkHealth(task).catch(err => logError('checkHealth', err)));
   }, 30 * 1000);

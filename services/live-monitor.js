@@ -4,11 +4,12 @@ const sshService = require('./ssh');
 const taskManager = require('./task-manager');
 const platformApi = require('./platform-api');
 const { dqEsc, shSingleQuote } = require('../utils/shell-escape');
+const { decrypt } = require('./crypto');
 
 const DOUYIN_CHECK_SCRIPT = '/opt/restream-console/check_douyin.py';
 
 function getDouyinCookies(userId) {
-  return getSetting('douyin_cookies', userId) || '';
+  return decrypt(getSetting('douyin_cookies', userId) || '') || '';
 }
 
 function buildDouyinCheckCmd(url, userId) {

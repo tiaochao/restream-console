@@ -14,8 +14,10 @@ const SOURCE_FILES = [
   'server.js', 'db.js', 'package.json', 'package-lock.json', 'Dockerfile', 'nginx-xiaoyan.chat.conf',
   'middleware/auth.js', 'middleware/csrf.js',
   'routes/auth.js', 'routes/admin.js', 'routes/channels.js', 'routes/dashboard.js', 'routes/logs.js', 'routes/media.js', 'routes/settings.js', 'routes/stream-keys.js', 'routes/tasks.js', 'routes/vps.js', 'routes/youtube-channels.js',
-  'services/live-monitor.js', 'services/platform-api.js', 'services/ssh.js', 'services/task-manager.js', 'services/youtube-monitor.js', 'services/youtube-channel-sync.js',
+  'services/crypto.js', 'services/ffmpeg-args.js', 'services/live-monitor.js', 'services/notifier.js', 'services/platform-api.js', 'services/ssh.js', 'services/task-manager.js', 'services/task-ssh.js', 'services/task-state.js', 'services/vps-scheduler.js', 'services/youtube-monitor.js', 'services/youtube-channel-sync.js',
+  'utils/log-error.js', 'utils/shell-escape.js',
   'views/layout.ejs', 'views/layout-bare.ejs', 'views/login.ejs', 'views/register.ejs', 'views/dashboard.ejs', 'views/vps.ejs', 'views/tasks.ejs', 'views/channels.ejs', 'views/logs.ejs', 'views/media.ejs', 'views/settings.ejs', 'views/stream-keys.ejs', 'views/admin-users.ejs', 'views/log-detail.ejs', 'views/partials/stats.ejs', 'views/youtube-channels.ejs',
+  'scripts/migrate-encrypt.js',
   'check_douyin.py',
 ];
 

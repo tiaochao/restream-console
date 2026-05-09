@@ -213,8 +213,8 @@ POST /tasks/:id/start 或 live-monitor 触发
   │           bash while 循环 {
   │             1. 第一轮优先使用预解析直链（更快）
   │             2. 后续用 yt-dlp 或 check_douyin.py 解析最新直链
-  │             3. ffmpeg 推流（同步录制到 /root/restream_uploads/录播_*.ts）
-  │             4. 推流异常 → 用录播文件兜底（循环播放已录制内容）
+  │             3. ffmpeg 拉取同一条输入，同时推流到目标 RTMP 并录制到 /root/restream_uploads/录播_*.ts
+  │             4. 推流异常或源关播 → 优先用当前场次的临时录播快照/自动录播文件兜底循环播放
   │             5. 直链过期（expire 时间戳）→ 主动刷新直链
   │           }
   │
@@ -225,12 +225,33 @@ POST /tasks/:id/start 或 live-monitor 触发
 后台健康检测（每 30 秒）
   ├─ SSH: kill -0 <pid>（存活检测）
   ├─ SSH: stat -c %Y <logfile>（日志活跃度）
-  ├─ SSH: tail -n 200 <logfile>（关键词检测）
+  ├─ SSH: cat /tmp/restream_<id>.status（JSON 状态文件）
   ├─ SSH: ss -tnp（RTMP 连接检测）
   └─ 根据结果更新状态：
        running → stalled → restarting → running（自动重启）
        或 error / target_lost / source_retrying / blocked / waiting_live
 ```
+
+### 当场录播兜底契约
+
+网络直播源的兜底源必须绑定到当前任务、当前场次，而不是默认使用媒体库旧文件或其他主播的文件。
+
+优先级：
+
+```text
+1. 当前直播实时直链
+2. 当前正在录制的临时片段快照：task_<taskId>_fallback.tmp
+3. 当前场次自动录播文件：录播_<YYYYMMDD_HHMMSS>_<频道名>_task<taskId>.ts
+4. 当前任务兼容链接：task_<taskId>_latest.ts
+5. 无可用录播时才进入断流/重试状态
+```
+
+实现约束：
+
+- 主推流和录播默认共用同一条输入，避免重复拉取抖音/B站等源站直链。
+- 源直播短断时可使用正在录制的临时快照兜底。
+- 源直播关播后，推 YouTube 的数据源应切到当前场次录播文件并循环播放。
+- 手动上传文件只作为纯文件转播或用户显式选择的素材，不应覆盖当前场次自动录播优先级。
 
 ### 推流目标
 

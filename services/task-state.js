@@ -5,6 +5,7 @@ function buildHealthCheckCmd(task) {
     `kill -0 ${task.remote_pid} 2>/dev/null && echo alive || echo dead`,
     `stat -c %Y ${task.log_file} 2>/dev/null || echo 0`,
     `cat /tmp/restream_${task.id}.status 2>/dev/null || echo '{}'`,
+    `if [ -s /tmp/restream_${task.id}.status ]; then _BG_PID=$(sed -n 's/.*"bg_pid":\\([0-9][0-9]*\\).*/\\1/p' /tmp/restream_${task.id}.status 2>/dev/null | head -1); if [ -n "$_BG_PID" ] && kill -0 "$_BG_PID" 2>/dev/null; then echo bg_fallback_alive; else echo bg_fallback_dead; fi; else echo bg_fallback_dead; fi`,
     `if ! command -v ss >/dev/null 2>&1; then echo rtmp_unknown; else _RTMP_HIT=0; _PIDS="${task.remote_pid}"; _SID=$(ps -o sid= -p ${task.remote_pid} 2>/dev/null | tr -d ' '); if [ -n "$_SID" ]; then _PIDS="$(ps -o pid= -g "$_SID" 2>/dev/null | tr '\\n' ' ')"; elif command -v pgrep >/dev/null 2>&1; then _SCAN="${task.remote_pid}"; while [ -n "$_SCAN" ]; do _NEXT=""; for _PP in $_SCAN; do for _CP in $(pgrep -P "$_PP" 2>/dev/null); do _PIDS="$_PIDS $_CP"; _NEXT="$_NEXT $_CP"; done; done; _SCAN="$_NEXT"; done; fi; for _P in $_PIDS; do ss -tnp 2>/dev/null | grep -E ':(1935|443) ' | grep -q "pid=$_P," && _RTMP_HIT=1; done; [ "$_RTMP_HIT" = "1" ] && echo rtmp_connected || echo no_rtmp; fi`,
   ].join('; ');
 }
@@ -12,7 +13,7 @@ function buildHealthCheckCmd(task) {
 function parseHealthResult(task, sshLines, now, stallTimeout) {
   const procStatus = sshLines[0]?.trim();
   const mtime = parseInt(sshLines[1]?.trim() || '0');
-  const rtmpStatus = sshLines[3]?.trim() || 'rtmp_unknown';
+  const rtmpStatus = sshLines[4]?.trim() || 'rtmp_unknown';
   const stale = mtime > 0 && (now - mtime) > stallTimeout;
 
   let statusJson = {};
@@ -25,8 +26,10 @@ function parseHealthResult(task, sshLines, now, stallTimeout) {
   const jsSource   = statusJson.source   || 'unknown';
   const jsTarget   = statusJson.target   || 'unknown';
   const jsFallback = statusJson.fallback === true;
+  const jsBgPid    = parseInt(statusJson.bg_pid || statusJson.bgPid || '0', 10) || 0;
 
-  const isFallbackActive     = jsFallback === true || jsState === 'fallback';
+  const isBgFallbackActive   = jsBgPid > 0 && sshLines[3]?.trim() === 'bg_fallback_alive';
+  const isFallbackActive     = jsFallback === true || jsState === 'fallback' || isBgFallbackActive;
   const isRetryLoop          = jsState === 'source_retry' || jsSource === 'retry';
   const isSourceOffline      = jsSource === 'offline' || jsState === 'source_offline';
   const isSourceUnavailable  = isSourceOffline;
@@ -38,14 +41,14 @@ function parseHealthResult(task, sshLines, now, stallTimeout) {
     /douyin\.com|live\.bilibili\.com|live\.kuaishou\.com|kuaishou\.com\/short-video/i.test(task.source_url);
 
   const expectsRtmp1935 = /^rtmp:\/\//i.test(String(task.rtmp_url || ''));
-  const isYoutubeRtmpMissing = isYoutubeTarget(task) && expectsRtmp1935 && procStatus !== 'dead' && rtmpStatus === 'no_rtmp';
+  const isYoutubeRtmpMissing = isYoutubeTarget(task) && expectsRtmp1935 && procStatus !== 'dead' && sshLines[4]?.trim() === 'no_rtmp';
   const isTargetStatus   = task.status === 'target_lost';
   const isBlocked        = false;
   const isRtmpError      = jsTarget === 'lost' && procStatus !== 'dead' && !jsFallback;
-  const hasHealthyFrameAfterErrors = jsState === 'streaming';
+  const hasHealthyFrameAfterErrors = jsState === 'streaming' || isFallbackActive;
 
   return {
-    procStatus, mtime, statusJson, rtmpStatus, stale, now,
+    procStatus, mtime, statusJson, rtmpStatus: sshLines[4]?.trim() || 'rtmp_unknown', stale, now,
     isFallbackActive, isRetryLoop, isSourceOffline, isSourceUnavailable,
     isTargetLost, isExpiredDirectUrl, isFfmpegNoStreamError, isLiveSource,
     isYoutubeRtmpMissing, isTargetStatus, isBlocked, isRtmpError,
@@ -132,7 +135,7 @@ function evaluateHealth(task, parsed, { blockLimit }) {
   }
 
   // Branch 5: YouTube RTMP 缺失
-  if (isYoutubeRtmpMissing && !isRetryLoop && !isExpiredDirectUrl && !isSourceUnavailable) {
+  if (isYoutubeRtmpMissing && !isFallbackActive && !isRetryLoop && !isExpiredDirectUrl && !isSourceUnavailable) {
     const newStallCount = (task.stall_count || 0) + 1;
     const warnLogMsg = `[健康监控] 任务 ${task.id} 未检测到 YouTube RTMP 连接，stall=${newStallCount}`;
     if (newStallCount >= 2) {
@@ -196,15 +199,18 @@ function evaluateHealth(task, parsed, { blockLimit }) {
 
   // Branch 9: 进程已死
   if (procStatus === 'dead') {
+    if (isFallbackActive) {
+      const newStallCount = (task.stall_count || 0) + 1;
+      return { action: 'setRunning', newStatus: 'running', newStallCount,
+        newBlockCount: null, clearPid: false, requiresStop: false, requiresRestart: false,
+        notifyType: null, notifyMsg: null, eventToStatus: null, eventReason: null,
+        logMsg: `[health] task ${task.id} wrapper process exited but fallback is still pushing, stall=${newStallCount}` };
+    }
     if (task.auto_restart) {
-      return { action: 'restart', newStatus: null, newStallCount: null,
-        newBlockCount: null, clearPid: false, requiresStop: false, requiresRestart: true,
-        notifyType: 'task_restarting', notifyMsg: `任务 ${task.name || task.id} 自动重启中`,
-        eventToStatus: 'restarting', eventReason: 'auto_restart',
-        logMsg: `[健康监控] 任务 ${task.id} 进程已死，自动重启` };
+      return restart(null, `[health] task ${task.id} process is dead, cleaning stale sessions before auto restart`);
     }
     return { action: 'error_stop', newStatus: 'error', newStallCount: null,
-      newBlockCount: null, clearPid: true, requiresStop: false, requiresRestart: false,
+      newBlockCount: null, clearPid: true, requiresStop: true, requiresRestart: false,
       notifyType: 'task_error', notifyMsg: `任务 ${task.name || task.id} 已停止（进程死亡，无自动重启）`,
       eventToStatus: 'error', eventReason: 'process_died', logMsg: null };
   }
@@ -214,6 +220,11 @@ function evaluateHealth(task, parsed, { blockLimit }) {
     const reason = stale ? `日志 ${now - mtime}s 无更新` : '无法获取直链';
     const newStallCount = (task.stall_count || 0) + 1;
     const logMsg = `[健康监控] 任务 ${task.id} ${reason}，stall=${newStallCount}`;
+    if (isFallbackActive) {
+      return { action: 'setRunning', newStatus: 'running', newStallCount,
+        newBlockCount: null, clearPid: false, requiresStop: false, requiresRestart: false,
+        notifyType: null, notifyMsg: null, eventToStatus: null, eventReason: null, logMsg };
+    }
     const retryThreshold = isRetryLoop && !stale ? 10 : 1;
     if (newStallCount < retryThreshold) {
       return { ...stall(newStallCount), logMsg, newStallCount };

@@ -5,9 +5,10 @@ const { getSetting } = require('../db');
 const taskManager = require('../services/task-manager');
 const platformApi = require('../services/platform-api');
 const youtubeMonitor = require('../services/youtube-monitor');
+const { decrypt } = require('../services/crypto');
 
 function getDouyinCookies(userId) {
-  return getSetting('douyin_cookies', userId) || '';
+  return decrypt(getSetting('douyin_cookies', userId) || '') || '';
 }
 
 function getFormData(userId) {
@@ -32,23 +33,6 @@ function getFormData(userId) {
 }
 
 function getTaskRows(userId, orderSql = "CASE t.status WHEN 'running' THEN 0 WHEN 'source_retrying' THEN 1 WHEN 'target_lost' THEN 2 WHEN 'stalled' THEN 3 WHEN 'restarting' THEN 4 WHEN 'waiting_live' THEN 5 WHEN 'error' THEN 6 ELSE 7 END, t.created_at DESC") {
-  db.prepare(`
-    UPDATE tasks
-    SET name = (
-      SELECT '[Auto] ' || c.name
-      FROM source_channels c
-      WHERE c.user_id = tasks.user_id AND c.url = tasks.source_url AND c.name IS NOT NULL AND c.name != ''
-      ORDER BY c.id DESC
-      LIMIT 1
-    )
-    WHERE user_id = ?
-      AND (name IS NULL OR trim(name) = '' OR name = '--')
-      AND EXISTS (
-        SELECT 1 FROM source_channels c
-        WHERE c.user_id = tasks.user_id AND c.url = tasks.source_url AND c.name IS NOT NULL AND c.name != ''
-      )
-  `).run(userId);
-
   return db.prepare(`
     SELECT t.*,
       v.name as vps_name,
@@ -243,11 +227,13 @@ router.post('/batch-stop', async (req, res) => {
 });
 
 router.post('/:id/delete', async (req, res) => {
-  const task = db.prepare('SELECT * FROM tasks WHERE id=? AND user_id=?').get(req.params.id, req.session.userId);
+  const taskId = parseInt(req.params.id, 10);
+  if (!taskId) return res.status(400).json({ ok: false, msg: '非法参数' });
+  const task = db.prepare('SELECT * FROM tasks WHERE id=? AND user_id=?').get(taskId, req.session.userId);
   if (task && ['running', 'source_retrying', 'stalled', 'target_lost', 'restarting'].includes(task.status)) {
     await taskManager.stopTask(task.id, req.session.userId).catch(() => {});
   }
-  db.prepare('DELETE FROM tasks WHERE id=? AND user_id=?').run(req.params.id, req.session.userId);
+  db.prepare('DELETE FROM tasks WHERE id=? AND user_id=?').run(taskId, req.session.userId);
   res.redirect('/tasks?toast=' + encodeURIComponent('任务已删除') + '&type=success');
 });
 
@@ -276,10 +262,12 @@ router.post('/:id/stop', async (req, res) => {
 });
 
 router.post('/:id/toggle-restart', (req, res) => {
-  const task = db.prepare('SELECT auto_restart FROM tasks WHERE id=? AND user_id=?').get(req.params.id, req.session.userId);
+  const taskId = parseInt(req.params.id, 10);
+  if (!taskId) return res.json({ ok: false });
+  const task = db.prepare('SELECT auto_restart FROM tasks WHERE id=? AND user_id=?').get(taskId, req.session.userId);
   if (!task) return res.json({ ok: false });
   const newVal = task.auto_restart ? 0 : 1;
-  db.prepare('UPDATE tasks SET auto_restart=? WHERE id=? AND user_id=?').run(newVal, req.params.id, req.session.userId);
+  db.prepare('UPDATE tasks SET auto_restart=? WHERE id=? AND user_id=?').run(newVal, taskId, req.session.userId);
   res.json({ ok: true, auto_restart: newVal });
 });
 

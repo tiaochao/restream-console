@@ -7,6 +7,7 @@ const { getSetting } = require('../db');
 const sshService = require('../services/ssh');
 const platformApi = require('../services/platform-api');
 const { ensureAutoStartTask } = require('../services/live-monitor');
+const { decrypt } = require('../services/crypto');
 
 const TITLE = '频道监控 - 转推控制台';
 const DOUYIN_CHECK_SCRIPT = '/opt/restream-console/check_douyin.py';
@@ -25,7 +26,7 @@ function dqEsc(s) {
 }
 
 function getDouyinCookies(userId) {
-  return getSetting('douyin_cookies', userId) || '';
+  return decrypt(getSetting('douyin_cookies', userId) || '') || '';
 }
 
 function normalizeChannelUrl(url) {

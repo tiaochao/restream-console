@@ -14,7 +14,9 @@ const { logError } = require('../utils/log-error');
  */
 function selectBestVps(userId) {
   try {
-    const maxPerVps = parseInt(getSetting('max_tasks_per_vps', userId) || '5');
+    const rawMax = parseInt(getSetting('max_tasks_per_vps', userId) || '5', 10);
+    const maxPerVps = (!isNaN(rawMax) && rawMax > 0) ? rawMax : 5;
+    if (isNaN(rawMax) || rawMax <= 0) logError('selectBestVps', new Error('max_tasks_per_vps 配置无效，使用默认值 5'));
 
     const row = db.prepare(`
       SELECT v.id, v.name,

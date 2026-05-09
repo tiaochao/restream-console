@@ -72,9 +72,10 @@ nohup bash -c "$(echo '<base64_script>' | base64 -d)" > /tmp/restream_<taskId>.l
 **HTTP 输入参数（`ffmpegHttpInputArgs`）**：
 ```
 -fflags +genpts -reconnect 1 -reconnect_streamed 1
--reconnect_delay_max 3 -reconnect_attempts 3 -rw_timeout 12000000
+-reconnect_delay_max 3 -rw_timeout 12000000
 ```
 - 断线自动重连，最大重连延迟 3 秒
+- 参数需兼容 Ubuntu 20.04 默认 FFmpeg 4.2.x；不要使用 `-reconnect_attempts` 这类旧版 FFmpeg 不支持的参数
 
 **录播参数（`ffmpegRecordArgs`）**：
 ```
@@ -83,19 +84,20 @@ nohup bash -c "$(echo '<base64_script>' | base64 -d)" > /tmp/restream_<taskId>.l
 - 录制为 `.ts` 格式（MPEG-TS 容器）
 - 单场最大录制时长 3600 秒（`_AUTO_REC_MAX_SECONDS`）
 - 单场最大文件大小 2GB（`_AUTO_REC_MAX_BYTES=2147483648`）
+- 网络直播源默认使用同一个 FFmpeg 输入同时推流和录制，避免重复拉取源站直链
 
 **媒体库循环播放（兜底模式）**：
 ```bash
 ffmpeg -stream_loop -1 -re -fflags +genpts -i <录播文件>
 ```
-- 直播源中断时自动循环播放录播文件维持推流
+- 直播源中断时自动循环播放当前任务、当前场次的录播文件维持推流
 
 ### 使用场景
 
 1. **网络直播源转推**：通过 yt-dlp 解析直链 → FFmpeg 拉取 HTTP 流 → 推送到 RTMP 目标
 2. **媒体库文件推送**：本地/VPS 文件以 `-stream_loop -1` 循环推流
 3. **自动录播**：推流同时写入 `.ts` 文件，支持按场次命名和旧文件清理（保留最近 2 份）
-4. **兜底播放**：直播源无法获取时，自动播放上一场录播文件填充直播间
+4. **兜底播放**：直播源无法获取或关播时，优先播放当前场次的临时录播快照或自动录播文件填充直播间
 
 ### 远端依赖自动安装
 
@@ -238,11 +240,11 @@ GET https://live.kuaishou.com/live_api/liveroom/livedetail?principalId=<userId>
 任务健康检测（每 30 秒）通过 SSH 执行以下综合命令：
 1. `kill -0 <pid>`：检测进程是否存活
 2. `stat -c %Y <logFile>`：获取日志文件最后修改时间，检测日志停止活跃（默认超时 120 秒）
-3. `tail -n 200 <logFile>`：分析日志末尾，匹配以下特征词：
-   - 推流中：`[推流]`、`frame=`
-   - 源不可用：`无法获取直链`、`404`、`not currently live`、`live has ended`
-   - 目标断开：`[TARGET_LOST]`、`broken pipe`、`av_interleaved_write_frame`
-   - 验证码/封锁：`captcha`、`403 Forbidden`、`access denied`
+3. `cat /tmp/restream_<taskId>.status`：读取 bash 脚本写出的 JSON 状态文件
+   - 推流中：`state=streaming`
+   - 源重试：`state=source_retry`
+   - 兜底播放：`state=fallback`
+   - 目标断开：`state=target_lost` 或 `target=lost`
 4. `ss -tnp`：检测是否存在到端口 1935（RTMP）或 443（RTMPS）的活跃连接
 
 ### 录播文件管理
@@ -251,3 +253,4 @@ GET https://live.kuaishou.com/live_api/liveroom/livedetail?principalId=<userId>
 - 文件命名格式：`录播_<YYYYMMDD_HHMMSS>_<频道名>_task<taskId>.ts`
 - 兼容软链接：`task_<taskId>_latest.ts`（指向最新录播）
 - 每个任务保留最近 2 份录播，自动清理旧文件
+- 当前场次兜底优先使用 `task_<taskId>_fallback.tmp` 临时快照，其次使用当前场次自动录播文件，再次使用 `task_<taskId>_latest.ts`

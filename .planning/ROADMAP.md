@@ -129,16 +129,24 @@
 
 ---
 
-### Phase 7: 新功能 — VPS 自动调度
+### Phase 7: 新功能 — VPS 自动调度 ✓ Complete (2026-05-09)
 **Goal:** 创建任务时无需手动选择 VPS，系统自动分配负载最低的可用节点。
 **Mode:** mvp
 **Requirements:** FEAT-01
+**Plans:** 3/3 complete
 
 **具体任务：**
-1. 实现 `services/vps-scheduler.js`：查询各在线 VPS 的当前运行任务数和 VPS 健康检测数据，返回负载最低的节点 ID
-2. 在推流码的"默认 VPS"字段新增"自动"选项（`default_vps_id = NULL` 语义复用或新增 `auto_schedule` 标志）
-3. 在 `startTask()` 中，当 `task.vps_id` 为空或标记为"自动"时，调用 `vps-scheduler.js` 动态分配
-4. 在任务列表中显示当次自动选择的 VPS 名称，并在任务详情中记录"由调度器分配"标注
+1. 实现 `services/vps-scheduler.js`：查询各在线 VPS 的当前运行任务数，返回负载最低的节点 ID
+2. 在推流码的"默认 VPS"字段新增"自动"选项（`default_vps_id = NULL` 语义复用）
+3. 在 `startTask()` 中，当 `task.vps_id` 为空时，调用 `vps-scheduler.js` 动态分配
+4. 在任务列表中显示自动分配状态，在任务详情中记录"由调度器分配"标注
+
+**执行计划：**
+| Plan | Wave | 覆盖 | 文件 | 说明 |
+|------|------|------|------|------|
+| [07-01-PLAN.md](phases/07-vps-auto-scheduling/07-01-PLAN.md) | 1 | FEAT-01 | services/vps-scheduler.js, __tests__/vps-scheduler.test.js | 调度器核心服务 + Jest 单元测试 |
+| [07-02-PLAN.md](phases/07-vps-auto-scheduling/07-02-PLAN.md) | 2 | FEAT-01 | services/task-manager.js | startTask() 集成调度器逻辑 |
+| [07-03-PLAN.md](phases/07-vps-auto-scheduling/07-03-PLAN.md) | 2 | FEAT-01 | views/tasks.ejs, views/stream-keys.ejs, views/task-detail.ejs, routes/tasks.js | 前端 UI 自动分配显示 |
 
 **Success Criteria:**
 1. 创建任务时将"默认 VPS"设为"自动"，任务启动后，任务详情中显示系统自动分配的 VPS 名称
@@ -148,4 +156,4 @@
 
 ---
 
-*Last updated: 2026-05-08*
+*Last updated: 2026-05-09*

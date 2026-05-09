@@ -552,7 +552,7 @@ async function taskAction(id, action, btn) {
   btn.textContent = action === 'start' ? '启动中...' : '停止中...';
   btn.disabled = true;
   try {
-    const r = await fetch('/tasks/' + id + '/' + action, { method: 'POST' });
+    const r = await fetch('/tasks/' + id + '/' + action, { method: 'POST', headers: { 'x-csrf-token': _csrf } });
     const d = await r.json();
     showToast(d.msg, d.ok ? 'success' : 'error');
     if (d.ok) setTimeout(() => location.reload(), 800);
@@ -561,7 +561,7 @@ async function taskAction(id, action, btn) {
 }
 async function toggleRestart(id, btn) {
   try {
-    const r = await fetch('/tasks/' + id + '/toggle-restart', { method: 'POST' });
+    const r = await fetch('/tasks/' + id + '/toggle-restart', { method: 'POST', headers: { 'x-csrf-token': _csrf } });
     const d = await r.json();
       if (d.ok) {
         const on = d.auto_restart === 1;
@@ -585,7 +585,7 @@ async function calibrateTask(id, btn) {
   btn.textContent = '检测中...';
   btn.disabled = true;
   try {
-    const r = await fetch('/tasks/' + id + '/calibrate', { method: 'POST' });
+    const r = await fetch('/tasks/' + id + '/calibrate', { method: 'POST', headers: { 'x-csrf-token': _csrf } });
     const d = await r.json();
     showToast(d.msg, d.ok ? (d.started ? 'success' : 'info') : 'error');
     if (d.ok && d.started) setTimeout(() => location.reload(), 800);
@@ -642,7 +642,7 @@ async function batchAction(action) {
   try {
     const r = await fetch('/tasks/batch-' + action, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-csrf-token': _csrf },
       body: JSON.stringify({ ids }),
     });
     const d = await r.json();
@@ -682,7 +682,7 @@ async function submitEdit() {
   try {
     const r = await fetch('/tasks/' + id + '/edit', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-csrf-token': _csrf },
       body: JSON.stringify(body),
     });
     const d = await r.json();

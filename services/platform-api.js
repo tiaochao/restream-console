@@ -1,5 +1,6 @@
 // 直接调用各平台 API 检测开播状态（本地运行，无需 VPS）
 const db = require('../db');
+const { decrypt } = require('./crypto');
 
 const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const TIMEOUT_MS = 15000;
@@ -23,7 +24,7 @@ function getSetting(key, userId) {
 }
 
 function getDouyinCookies(userId) {
-  return getSetting('douyin_cookies', userId) || '';
+  return decrypt(getSetting('douyin_cookies', userId) || '') || '';
 }
 
 async function doFetch(url, options = {}) {

@@ -299,7 +299,7 @@ async function resolveAddMeta() {
   try {
     const r = await fetch('/channels/resolve-meta', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-csrf-token': _csrf },
       body: JSON.stringify({ url: urlEl.value, platform: platformEl.value }),
     });
     const d = await r.json();
@@ -315,7 +315,7 @@ async function checkOne(id, btn) {
   const orig = btn.textContent;
   btn.textContent = '检测中...'; btn.disabled = true;
   try {
-    const r = await fetch('/channels/' + id + '/check', { method: 'POST' });
+    const r = await fetch('/channels/' + id + '/check', { method: 'POST', headers: { 'x-csrf-token': _csrf } });
     const d = await r.json();
     if (d.ok) {
       updateRowStatus(id, d.status);
@@ -331,7 +331,7 @@ async function checkAll(btn) {
   const orig = btn.textContent;
   btn.textContent = '检测中...'; btn.disabled = true;
   try {
-    const r = await fetch('/channels/check-all', { method: 'POST' });
+    const r = await fetch('/channels/check-all', { method: 'POST', headers: { 'x-csrf-token': _csrf } });
     const d = await r.json();
     if (d.ok && d.results) {
       d.results.forEach(item => updateRowStatus(item.id, item.status));
@@ -368,7 +368,7 @@ function updateRowStatus(id, status) {
 async function toggleAuto(id, btn) {
   btn.disabled = true;
   try {
-    const r = await fetch('/channels/' + id + '/toggle-auto', { method: 'POST' });
+    const r = await fetch('/channels/' + id + '/toggle-auto', { method: 'POST', headers: { 'x-csrf-token': _csrf } });
     const d = await r.json();
     if (d.ok) {
       const on = d.auto_start === 1;
@@ -441,7 +441,7 @@ async function saveEdit(e) {
   try {
     const r = await fetch('/channels/' + id + '/edit', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-csrf-token': _csrf },
       body: JSON.stringify(body),
     });
     const d = await r.json();

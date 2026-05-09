@@ -129,7 +129,7 @@ router.post('/test-douyin', async (req, res) => {
   }
 
   try {
-    const result = await platformApi.checkDouyin(url, getSetting(req.session.userId, 'douyin_cookies'));
+    const result = await platformApi.checkDouyin(url, decrypt(getSetting(req.session.userId, 'douyin_cookies') || '') || '');
     if (!result) return res.json({ ok: false, msg: '暂时无法可靠检测，请稍后重试或使用 VPS 检测' });
     if (result.error) return res.json({ ok: false, msg: result.error });
     const anchor = result.anchorName ? `，主播：${result.anchorName}` : '';

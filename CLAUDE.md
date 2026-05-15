@@ -5,7 +5,7 @@
 YouTube 直播转推控制台。通过 SSH 在远端 VPS 上启动 FFmpeg，将 YouTube 直播转推至多个 RTMP 目标。
 
 - **技术栈**：Node.js 24 / Express / SQLite / FFmpeg / Docker
-- **规划目录**：`.planning/`（GSD 工作流）
+- **流程约束**：按 GSD 思路拆分、验证和记录，但仓库内不再保留 `.planning/` 运行态目录。
 
 ## GSD 工作流
 
@@ -45,15 +45,24 @@ YouTube 直播转推控制台。通过 SSH 在远端 VPS 上启动 FFmpeg，将 
 - 自动录播文件命名应保留日期时间、频道/主播名和 taskId，便于排查是哪一场直播。
 - FFmpeg 参数必须兼容 Ubuntu 20.04 默认 FFmpeg 4.2.x；不要使用未验证的新版本专属参数。
 
+## 故障排查
+
+遇到问题**先查** [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md)，里面有：
+- 环境配置速览（VPS 列表、FFmpeg 版本、部署命令）
+- 各平台已知限制（抖音 Cookie、YouTube tee muxer、FFmpeg 4.2.x 禁用参数）
+- 历史修复记录（按时间排列）
+
+**每次解决新问题后，及时追加到 `TROUBLESHOOTING.md` 的第七节"历史修复时间线"。**
+
 ## 关键文件
 
 | 文件 | 说明 |
 |------|------|
+| `TROUBLESHOOTING.md` | 故障排查手册（环境配置 + 历史问题记录）|
 | `services/task-manager.js` | 核心：任务生命周期、FFmpeg、SSH |
 | `services/youtube-monitor.js` | YouTube 直播状态检测 |
 | `services/live-monitor.js` | 多平台直播检测轮询 |
 | `db.js` | 数据库 schema 和迁移 |
-| `.planning/CONCERNS.md` | 已知严重问题清单 |
 
 ## 已知严重问题（待 Phase 1 修复）
 

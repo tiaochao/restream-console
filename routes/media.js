@@ -5,13 +5,13 @@ const path = require('path');
 const multer = require('multer');
 const db = require('../db');
 const sshService = require('../services/ssh');
-const { recordLabelForTask } = require('../services/task-manager');
+
+// In-memory job store for long-running VPS tasks (vocals removal etc.)
+const pendingJobs = new Map();
 
 const TITLE = '媒体库 - 转推控制台';
 const UPLOAD_DIR = '/root/restream_uploads';
-const LEGACY_RECORD_DIR = '/root/restream_recordings';
-const DOUYIN_RECORD_DIR = '/root/douyin2youtube/recordings';
-const MEDIA_SCAN_DIRS = [UPLOAD_DIR, LEGACY_RECORD_DIR, DOUYIN_RECORD_DIR];
+const MEDIA_SCAN_DIRS = [UPLOAD_DIR];
 const MAX_UPLOAD_SIZE = 3 * 1024 * 1024 * 1024;
 const DEFAULT_CHUNK_SIZE = 8 * 1024 * 1024;
 const MAX_CHUNK_SIZE = 16 * 1024 * 1024;
@@ -19,6 +19,7 @@ const MIN_CHUNK_SIZE = 1024 * 1024;
 const MEDIA_EXT_RE = /\.(mp4|mkv|avi|ts|mov|flv|wmv|m4v|webm)$/i;
 const UPLOAD_ID_RE = /^[a-f0-9]{32,64}$/i;
 const UPLOAD_SESSION_TTL_HOURS = 24;
+const REMOTE_CHUNK_WRITE_TIMEOUT_MS = 150 * 1000;
 
 function shQuote(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
@@ -181,6 +182,100 @@ async function cleanupStaleChunkTemps(vpsId, userId, uploadId) {
   ).catch(() => {});
 }
 
+async function writeRemoteFileViaSshStdin(vpsId, userId, remotePath, source, req, onChunk) {
+  const ssh = await sshService.connect(vpsId, userId);
+  const command = `cat > ${shQuote(remotePath)}`;
+
+  return new Promise((resolve, reject) => {
+    let done = false;
+    let inputEnded = false;
+    let channel = null;
+    let exitCode = 0;
+    let exitSignal = null;
+    let stderr = '';
+    let writeTimer = null;
+
+    const cleanup = () => {
+      if (writeTimer) clearTimeout(writeTimer);
+      source.off('data', handleData);
+      source.off('end', handleEnd);
+      source.off('limit', handleLimit);
+      source.off('error', finish);
+      req.off('aborted', handleAbort);
+      if (channel) {
+        channel.off('error', finish);
+      }
+    };
+
+    const finish = (err) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      if (err) {
+        try { source.unpipe(channel); } catch (_) {}
+        try { channel?.destroy(); } catch (_) {}
+        return reject(err);
+      }
+      resolve();
+    };
+
+    const resetWriteTimer = () => {
+      if (writeTimer) clearTimeout(writeTimer);
+      writeTimer = setTimeout(() => {
+        finish(new Error('VPS write timeout; check network, disk IO, or SSH connection'));
+      }, REMOTE_CHUNK_WRITE_TIMEOUT_MS);
+    };
+
+    const handleData = (chunk) => {
+      onChunk(chunk);
+      resetWriteTimer();
+    };
+
+    const handleEnd = () => {
+      inputEnded = true;
+      resetWriteTimer();
+    };
+
+    const handleLimit = () => finish(new Error('file exceeds upload limit'));
+    const handleAbort = () => finish(new Error('upload request aborted'));
+
+    source.pause();
+    source.on('limit', handleLimit);
+    source.on('error', finish);
+    req.on('aborted', handleAbort);
+
+    ssh.connection.exec(command, (err, ch) => {
+      if (err) return finish(err);
+      channel = ch;
+      resetWriteTimer();
+
+      ch.stderr.on('data', chunk => {
+        stderr = (stderr + String(chunk)).slice(-800);
+      });
+      ch.on('data', () => {});
+      ch.on('error', finish);
+      ch.on('exit', (code, signal) => {
+        exitCode = code || 0;
+        exitSignal = signal || null;
+      });
+      ch.on('close', () => {
+        if (!inputEnded) {
+          return finish(new Error('VPS write channel closed before upload completed'));
+        }
+        if (exitCode !== 0 || exitSignal) {
+          const detail = (stderr || exitSignal || `exit ${exitCode}`).trim();
+          return finish(new Error(`VPS write command failed: ${detail}`));
+        }
+        finish();
+      });
+
+      source.on('data', handleData);
+      source.on('end', handleEnd);
+      source.pipe(ch);
+    });
+  });
+}
+
 function createDirectVpsStorage() {
   return {
     _handleFile(req, file, cb) {
@@ -203,61 +298,36 @@ function createDirectVpsStorage() {
           : `${remotePath}.uploading-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
         const contentLength = parseInt(req.headers['content-length'] || '0', 10) || 0;
 
-        await sshService.exec(vps.id, `mkdir -p ${shQuote(targetDir)}`, userId);
-        const avail = await getAvailableBytes(vps.id, userId, targetDir);
-        if (avail > 0 && contentLength > 0 && avail < contentLength * 1.03) {
-          file.stream.resume();
-          throw new Error(`VPS 剩余空间不足，剩余 ${formatBytes(avail)}，本次写入约 ${formatBytes(contentLength)}`);
+        if (!req._uploadSession) {
+          await sshService.exec(vps.id, `mkdir -p ${shQuote(targetDir)}`, userId);
+          const avail = await getAvailableBytes(vps.id, userId, targetDir);
+          if (avail > 0 && contentLength > 0 && avail < contentLength * 1.03) {
+            file.stream.resume();
+            throw new Error(`VPS 剩余空间不足，剩余 ${formatBytes(avail)}，本次写入约 ${formatBytes(contentLength)}`);
+          }
         }
-
-        const ssh = await sshService.connect(vps.id, userId);
-        const sftp = await new Promise((resolve, reject) => {
-          ssh.connection.sftp((err, client) => err ? reject(err) : resolve(client));
-        });
 
         const hash = crypto.createHash('md5');
         let size = 0;
-        let done = false;
-
-        const finish = (err, info) => {
-          if (done) return;
-          done = true;
-          if (err) {
-            try { sftp.end(); } catch (_) {}
-            sshService.exec(vps.id, `rm -f ${shQuote(remoteTempPath)}`, userId).catch(() => {});
-            cb(err);
-          } else {
-            cb(null, info);
-          }
-        };
-
-        const write = sftp.createWriteStream(remoteTempPath, { flags: 'w', mode: 0o644 });
-        file.stream.on('data', chunk => {
+        await writeRemoteFileViaSshStdin(vps.id, userId, remoteTempPath, file.stream, req, chunk => {
           size += chunk.length;
           hash.update(chunk);
         });
-        file.stream.on('limit', () => finish(new Error('文件超过上传限制')));
-        file.stream.on('error', finish);
-        write.on('error', finish);
-        write.on('finish', () => {
-          finish(null, {
-            userId,
-            vpsId: vps.id,
-            name: safeName,
-            originalName,
-            remotePath,
-            remoteTempPath,
-            size,
-            md5: hash.digest('hex'),
-            closeSftp: () => { try { sftp.end(); } catch (_) {} },
-          });
+
+        cb(null, {
+          userId,
+          vpsId: vps.id,
+          name: safeName,
+          originalName,
+          remotePath,
+          remoteTempPath,
+          size,
+          md5: hash.digest('hex'),
         });
-        file.stream.pipe(write);
       })().catch(cb);
     },
     _removeFile(req, file, cb) {
       if (file?.vpsId && file?.remoteTempPath) {
-        if (typeof file.closeSftp === 'function') file.closeSftp();
         sshService.exec(file.vpsId, `rm -f ${shQuote(file.remoteTempPath)}`, file.userId || req.session.userId)
           .finally(() => cb(null));
       } else {
@@ -318,6 +388,10 @@ router.get('/api/list', (req, res) => {
   res.json(files);
 });
 
+router.get('/csrf', (req, res) => {
+  res.json({ token: req.session.csrfToken || '' });
+});
+
 router.post('/:vpsId/upload-session', async (req, res) => {
   const userId = req.session.userId;
   const vps = db.prepare('SELECT * FROM vps WHERE id=? AND user_id=?').get(req.params.vpsId, userId);
@@ -335,6 +409,33 @@ router.post('/:vpsId/upload-session', async (req, res) => {
   if (fileSize > MAX_UPLOAD_SIZE) return res.status(400).json({ ok: false, msg: '文件超过 3 GB 限制' });
 
   cleanupExpiredUploadSessions(userId);
+
+  // 同名同大小的活跃会话直接复用，支持断点续传
+  const existing = db.prepare(`
+    SELECT * FROM upload_sessions
+    WHERE user_id=? AND vps_id=? AND original_name=? AND size=? AND expires_at > datetime('now')
+    ORDER BY expires_at DESC LIMIT 1
+  `).get(userId, vps.id, originalName, fileSize);
+
+  if (existing) {
+    try {
+      const existingChunkDir = getChunkDir(existing.id);
+      const listR = await sshService.exec(
+        vps.id,
+        `find ${shQuote(existingChunkDir)} -maxdepth 1 -type f -name '*.part' -printf '%f\\t%s\\n' 2>/dev/null || true`,
+        userId
+      );
+      const { uploaded } = parseUploadedChunks(listR.stdout, existing.chunk_size, fileSize);
+      cleanupStaleChunkTemps(vps.id, userId, existing.id);
+      return res.json({
+        ok: true, uploadId: existing.id, chunkSize: existing.chunk_size,
+        totalChunks: existing.total_chunks, uploaded, name: existing.name,
+        remotePath: existing.remote_path, resumed: true,
+      });
+    } catch (_) {
+      // 无法查询已有会话时继续创建新会话
+    }
+  }
 
   const safeName = uniqueFilename(userId, vps.id, safeFilename(originalName));
   const remotePath = `${UPLOAD_DIR}/${safeName}`;
@@ -424,7 +525,6 @@ router.post('/:vpsId/upload-chunk', (req, res, next) => {
   const expectedSize = Math.min(session.chunk_size, session.size - req._chunkIndex * session.chunk_size);
 
   try {
-    if (typeof file.closeSftp === 'function') file.closeSftp();
     if (file.size !== expectedSize) {
       await sshService.exec(file.vpsId, `rm -f ${shQuote(file.remotePath)} ${shQuote(file.remoteTempPath)}`, req.session.userId)
         .catch(() => {});
@@ -533,98 +633,6 @@ router.post('/:vpsId/scan', async (req, res) => {
   }
 });
 
-// 修复乱码录播文件名：将 task_N_recording.ts / 乱码命名重命名为 录播_YYYYMMDD_HHMMSS_label_taskN.ts
-router.post('/:vpsId/fix-names', async (req, res) => {
-  const userId = req.session.userId;
-  const vps = db.prepare('SELECT * FROM vps WHERE id=? AND user_id=?').get(req.params.vpsId, userId);
-  if (!vps) return res.json({ ok: false, msg: 'VPS 不存在或无权限' });
-
-  try {
-    // 从 VPS 获取所有上传目录中疑似乱码/旧格式的录播文件
-    // 特征：以 task_ 开头（旧格式），或文件名含 \x?? 非 ASCII 序列（shell 乱码）
-    const dirs = MEDIA_SCAN_DIRS.map(shQuote).join(' ');
-    const findCmd = `for d in ${dirs}; do [ -d "$d" ] || continue; find "$d" -maxdepth 1 -type f -iname "*.ts" ! -name "task_*_latest.ts" | while IFS= read -r f; do b=$(basename "$f"); printf '%s\\t%s\\t%s\\n' "$b" "$f" "$(stat -c%s "$f" 2>/dev/null || echo 0)"; done; done`;
-    const findR = await sshService.exec(vps.id, findCmd, userId);
-    const lines = (findR.stdout || '').trim().split('\n').filter(Boolean);
-
-    let renamed = 0;
-    let skipped = 0;
-    const errors = [];
-
-    for (const line of lines) {
-      const parts = line.split('\t');
-      if (parts.length < 3) continue;
-      const [name, remotePath] = parts;
-
-      // 从文件名末尾提取 taskN，支持两种格式：
-      // 旧格式：task_N_recording.ts（存在于内存中的 recording 临时文件改后缀）
-      // 乱码格式：<乱码>_taskN.ts（中文录播前缀在非 UTF-8 shell 中乱码）
-      const taskMatch = name.match(/[_\-]?task[_\-]?(\d+)[_\-]?(?:recording)?\.ts$/i)
-        || name.match(/_task(\d+)\.ts$/i);
-      if (!taskMatch) { skipped++; continue; }
-
-      const taskId = parseInt(taskMatch[1], 10);
-      const task = db.prepare('SELECT * FROM tasks WHERE id=? AND user_id=?').get(taskId, userId);
-      if (!task) { skipped++; continue; }
-
-      // 提取文件修改时间（作为录播时间）
-      const mtimeR = await sshService.exec(vps.id, `stat -c%Y ${shQuote(remotePath)} 2>/dev/null || echo 0`, userId);
-      const mtime = parseInt((mtimeR.stdout || '').trim(), 10) || Math.floor(Date.now() / 1000);
-
-      // 格式化为上海时间（VPS 上执行以复用 date 命令）
-      const tsR = await sshService.exec(
-        vps.id,
-        `TZ=Asia/Shanghai date -d @${mtime} +%Y%m%d_%H%M%S 2>/dev/null || date -u -d "@$((${mtime} + 28800))" +%Y%m%d_%H%M%S 2>/dev/null || date +%Y%m%d_%H%M%S`,
-        userId
-      );
-      const ts = (tsR.stdout || '').trim() || new Date(mtime * 1000).toISOString().slice(0,19).replace(/[-T:]/g, (c) => c === 'T' ? '_' : c).replace(/[:-]/g, '');
-
-      const label = recordLabelForTask(task);
-      const newName = `录播_${ts}_${label}_task${taskId}.ts`;
-      const dir = path.posix.dirname(remotePath);
-      const newPath = `${dir}/${newName}`;
-
-      // 跳过已经是正确格式的文件名
-      if (name === newName) { skipped++; continue; }
-
-      // 目标路径不能冲突
-      const checkR = await sshService.exec(vps.id, `[ -e ${shQuote(newPath)} ] && echo exists || echo ok`, userId);
-      if ((checkR.stdout || '').trim() === 'exists') {
-        errors.push(`${name} → 目标文件已存在，跳过`);
-        skipped++;
-        continue;
-      }
-
-      try {
-        await sshService.exec(vps.id, `mv ${shQuote(remotePath)} ${shQuote(newPath)}`, userId);
-
-        // 更新 DB 记录
-        const existing = db.prepare('SELECT id FROM media_files WHERE user_id=? AND vps_id=? AND remote_path=?')
-          .get(userId, vps.id, remotePath);
-        if (existing) {
-          db.prepare('UPDATE media_files SET name=?, remote_path=? WHERE id=?').run(newName, newPath, existing.id);
-        } else {
-          const size = parseInt(parts[2], 10) || 0;
-          db.prepare('INSERT INTO media_files (user_id, vps_id, name, remote_path, size) VALUES (?,?,?,?,?)')
-            .run(userId, vps.id, newName, newPath, size);
-        }
-        renamed++;
-      } catch (mvErr) {
-        errors.push(`${name} → 重命名失败: ${mvErr.message}`);
-        skipped++;
-      }
-    }
-
-    res.json({
-      ok: true,
-      msg: `修复完成：重命名 ${renamed} 个，跳过 ${skipped} 个${errors.length ? `，${errors.length} 个错误` : ''}`,
-      renamed, skipped, errors,
-    });
-  } catch (e) {
-    res.json({ ok: false, msg: '修复文件名失败：' + e.message });
-  }
-});
-
 router.get('/:vpsId/disk', async (req, res) => {
   const vps = db.prepare('SELECT * FROM vps WHERE id=? AND user_id=?').get(req.params.vpsId, req.session.userId);
   if (!vps) return res.json({ ok: false, msg: 'VPS 不存在或无权限' });
@@ -646,6 +654,184 @@ router.get('/:vpsId/disk', async (req, res) => {
   } catch (e) {
     res.json({ ok: false, msg: e.message });
   }
+});
+
+router.get('/jobs/:jobId', (req, res) => {
+  const job = pendingJobs.get(req.params.jobId);
+  if (!job || job.userId !== req.session.userId) return res.status(404).json({ ok: false, msg: '任务不存在' });
+  const { userId: _u, ...safe } = job;
+  res.json({ ok: true, ...safe });
+});
+
+router.get('/:id/download', async (req, res) => {
+  const file = db.prepare('SELECT * FROM media_files WHERE id=? AND user_id=?')
+    .get(req.params.id, req.session.userId);
+  if (!file) return res.status(404).send('文件不存在');
+  if (!isAllowedMediaPath(file.remote_path)) return res.status(400).send('路径无效');
+
+  const vps = db.prepare('SELECT id FROM vps WHERE id=? AND user_id=?').get(file.vps_id, req.session.userId);
+  if (!vps) return res.status(403).send('无权限');
+
+  const safeName = encodeURIComponent(file.name).replace(/'/g, '%27');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeName}`);
+  res.setHeader('Content-Type', 'application/octet-stream');
+  if (file.size) res.setHeader('Content-Length', file.size);
+
+  try {
+    const ssh = await sshService.connect(file.vps_id, req.session.userId);
+    const sftp = await new Promise((resolve, reject) => {
+      ssh.connection.sftp((err, client) => (err ? reject(err) : resolve(client)));
+    });
+    const stream = sftp.createReadStream(file.remote_path);
+    stream.on('error', () => { try { sftp.end(); } catch (_) {} res.end(); });
+    stream.on('close', () => { try { sftp.end(); } catch (_) {} });
+    stream.pipe(res);
+  } catch (e) {
+    if (!res.headersSent) return res.status(500).send('连接 VPS 失败：' + e.message);
+    res.end();
+  }
+});
+
+router.post('/:id/remove-vocals', async (req, res) => {
+  const userId = req.session.userId;
+  const file = db.prepare('SELECT * FROM media_files WHERE id=? AND user_id=?').get(req.params.id, userId);
+  if (!file) return res.status(404).json({ ok: false, msg: '文件不存在' });
+  if (!isAllowedMediaPath(file.remote_path)) return res.status(400).json({ ok: false, msg: '路径无效' });
+
+  const ext = path.extname(file.remote_path);
+  const dir = path.posix.dirname(file.remote_path);
+  const baseName = path.basename(file.remote_path, ext);
+  const outName = `${baseName}_novoice${ext}`;
+  const outPath = `${dir}/${outName}`;
+
+  // Reject if output already exists in DB
+  const existing = db.prepare('SELECT id FROM media_files WHERE user_id=? AND vps_id=? AND remote_path=?')
+    .get(userId, file.vps_id, outPath);
+  if (existing) return res.json({ ok: false, msg: `消声版已存在：${outName}` });
+
+  const jobId = crypto.randomBytes(16).toString('hex');
+  pendingJobs.set(jobId, { userId, fileId: file.id, status: 'running', startedAt: Date.now() });
+
+  // Run ffmpeg in background (audio phase cancellation, video stream copied)
+  (async () => {
+    const job = pendingJobs.get(jobId);
+    try {
+      const ffCmd = [
+        'ffmpeg -y',
+        `-i ${shQuote(file.remote_path)}`,
+        `-af 'pan=stereo|c0=c0-c1|c1=c1-c0'`,
+        '-c:v copy',
+        shQuote(outPath),
+      ].join(' ');
+      const r = await sshService.exec(file.vps_id, ffCmd, userId);
+      if (r.code && r.code !== 0) {
+        const detail = (r.stdout || r.stderr || `exit ${r.code}`).slice(-300);
+        throw new Error(detail);
+      }
+      const sizeR = await sshService.exec(file.vps_id, `stat -c%s ${shQuote(outPath)} 2>/dev/null || echo 0`, userId);
+      const size = parseInt((sizeR.stdout || '').trim(), 10) || 0;
+      const ins = db.prepare('INSERT INTO media_files (user_id, vps_id, name, remote_path, size) VALUES (?,?,?,?,?)')
+        .run(userId, file.vps_id, outName, outPath, size);
+      job.status = 'done';
+      job.newFileId = ins.lastInsertRowid;
+      job.outputName = outName;
+    } catch (e) {
+      if (job) { job.status = 'error'; job.error = e.message.slice(0, 300); }
+    } finally {
+      setTimeout(() => pendingJobs.delete(jobId), 30 * 60 * 1000);
+    }
+  })();
+
+  res.json({ ok: true, jobId, msg: '消除人声任务已启动，视频将保留背景音乐' });
+});
+
+router.post('/:id/transcode', async (req, res) => {
+  const userId = req.session.userId;
+  const file = db.prepare('SELECT * FROM media_files WHERE id=? AND user_id=?').get(req.params.id, userId);
+  if (!file) return res.status(404).json({ ok: false, msg: '文件不存在' });
+  if (!isAllowedMediaPath(file.remote_path)) return res.status(400).json({ ok: false, msg: '路径无效' });
+
+  const ext = path.extname(file.remote_path);
+  const dir = path.posix.dirname(file.remote_path);
+  const baseName = path.basename(file.remote_path, ext);
+  const outName = `${baseName}_h264${ext}`;
+  const outPath = `${dir}/${outName}`;
+  // 转码期间写临时文件，完成后改名，防止扫描把半成品登记进库
+  const tmpPath = `${outPath}.transcoding`;
+
+  const existing = db.prepare('SELECT id FROM media_files WHERE user_id=? AND vps_id=? AND remote_path=?')
+    .get(userId, file.vps_id, outPath);
+  if (existing) return res.json({ ok: false, msg: `H.264 版本已存在：${outName}` });
+
+  const jobId = crypto.randomBytes(16).toString('hex');
+  const doneFile = `/tmp/transcode_${jobId}.done`;
+  const logFile = `/tmp/transcode_${jobId}.log`;
+  const scriptPath = `/tmp/transcode_${jobId}.sh`;
+  pendingJobs.set(jobId, { userId, fileId: file.id, status: 'running', startedAt: Date.now() });
+
+  (async () => {
+    const job = pendingJobs.get(jobId);
+    try {
+      // 把内层脚本 base64 编码后写到 VPS 临时 .sh 文件再执行
+      // 避免 bash -c '...' 与 shQuote 单引号嵌套互相截断导致语法错误
+      const innerScript = [
+        '#!/bin/bash',
+        `rm -f ${shQuote(tmpPath)}`,
+        `ffmpeg -y -i ${shQuote(file.remote_path)} -c:v libx264 -preset veryfast -crf 18 -g 48 -keyint_min 48 -c:a copy -f mp4 ${shQuote(tmpPath)} >${shQuote(logFile)} 2>&1`,
+        `_RC=$?`,
+        `[ "$_RC" -eq 0 ] && mv -f ${shQuote(tmpPath)} ${shQuote(outPath)}`,
+        `echo "$_RC" >${shQuote(doneFile)}`,
+      ].join('\n');
+      const b64 = Buffer.from(innerScript).toString('base64');
+      await sshService.exec(file.vps_id, `printf '%s' '${b64}' | base64 -d >${shQuote(scriptPath)} && chmod +x ${shQuote(scriptPath)}`, userId);
+      await sshService.exec(file.vps_id, `nohup ${shQuote(scriptPath)} >/dev/null 2>&1 &`, userId);
+
+      // 每 30 秒轮询一次，最长等 4 小时
+      const MAX_WAIT_MS = 4 * 60 * 60 * 1000;
+      const startedAt = Date.now();
+      while (true) {
+        await new Promise(r => setTimeout(r, 30000));
+        if (!pendingJobs.has(jobId)) break;
+        const r = await sshService.exec(file.vps_id, `cat ${shQuote(doneFile)} 2>/dev/null`, userId);
+        const exitCode = r.stdout.trim();
+        if (exitCode !== '') {
+          if (exitCode !== '0') {
+            const errLog = await sshService.exec(file.vps_id, `tail -5 ${shQuote(logFile)} 2>/dev/null`, userId);
+            throw new Error(errLog.stdout.trim().slice(-300) || `转码失败 (exit ${exitCode})`);
+          }
+          break;
+        }
+        if (Date.now() - startedAt > MAX_WAIT_MS) throw new Error('转码超时（超过 4 小时）');
+      }
+
+      const sizeR = await sshService.exec(file.vps_id, `stat -c%s ${shQuote(outPath)} 2>/dev/null || echo 0`, userId);
+      const size = parseInt((sizeR.stdout || '').trim(), 10) || 0;
+      if (size === 0) throw new Error('转码完成但输出文件为空');
+      // UPSERT：若扫描已预先登记则更新大小，否则新增
+      const preExist = db.prepare('SELECT id FROM media_files WHERE user_id=? AND vps_id=? AND remote_path=?')
+        .get(userId, file.vps_id, outPath);
+      let newFileId;
+      if (preExist) {
+        db.prepare('UPDATE media_files SET size=?, name=? WHERE id=?').run(size, outName, preExist.id);
+        newFileId = preExist.id;
+      } else {
+        const ins = db.prepare('INSERT INTO media_files (user_id, vps_id, name, remote_path, size) VALUES (?,?,?,?,?)')
+          .run(userId, file.vps_id, outName, outPath, size);
+        newFileId = ins.lastInsertRowid;
+      }
+      job.status = 'done';
+      job.newFileId = newFileId;
+      job.outputName = outName;
+    } catch (e) {
+      sshService.exec(file.vps_id, `rm -f ${shQuote(tmpPath)}`, userId).catch(() => {});
+      if (job) { job.status = 'error'; job.error = e.message.slice(0, 300); }
+    } finally {
+      sshService.exec(file.vps_id, `rm -f ${shQuote(doneFile)} ${shQuote(logFile)} ${shQuote(scriptPath)}`, userId).catch(() => {});
+      setTimeout(() => pendingJobs.delete(jobId), 30 * 60 * 1000);
+    }
+  })();
+
+  res.json({ ok: true, jobId, msg: `转码任务已在 VPS 后台启动，大文件需要较长时间（每 30 秒更新进度），完成后自动入库` });
 });
 
 router.post('/:id/delete', async (req, res) => {
